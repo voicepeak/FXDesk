@@ -25,8 +25,10 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [transform, setTransform] = useState({ scale: 1, tx: 0, ty: 0 });
+  const [viewMode, setViewMode] = useState<'fit' | 'native'>('fit');
+  const [paneSizes, setPaneSizes] = useState({ left: { w: 0, h: 0 }, right: { w: 0, h: 0 } });
   const [baseDims, setBaseDims] = useState<{ w: number; h: number } | null>(null);
-  const [resultDims, setResultDims] = useState<{ w: number; h: number } | null>(null);
+  const [resultImage, setResultImage] = useState<{ url: string; w: number; h: number } | null>(null);
   const [wipe, setWipe] = useState(false);
   const [wipePos, setWipePos] = useState(50);
   const [repairMode, setRepairMode] = useState(false);
@@ -62,44 +64,74 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
   }, [load]);
 
   const currentRun: Run | null = useMemo(() => detail?.runs.find((r) => r.id === currentRunId) ?? null, [detail, currentRunId]);
+  const resultDims = resultImage?.url === currentRun?.resultUrl ? resultImage : null;
 
   useEffect(() => {
     setElements(currentRun?.qc?.elements?.confirmed ?? []);
     setRepairRects([]);
     setRepairMode(false);
-    if (currentRun?.resultUrl) {
-      const im = new window.Image();
-      im.onload = () => setResultDims({ w: im.naturalWidth, h: im.naturalHeight });
-      im.src = currentRun.resultUrl;
-    } else {
-      setResultDims(null);
-    }
   }, [currentRun?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    let active = true;
+    setResultImage(null);
+    if (currentRun?.resultUrl) {
+      const url = currentRun.resultUrl;
+      const im = new window.Image();
+      im.onload = () => { if (active) setResultImage({ url, w: im.naturalWidth, h: im.naturalHeight }); };
+      im.src = url;
+    }
+    return () => { active = false; };
+  }, [currentRun?.resultUrl]);
+
   const fit = useCallback(() => {
-    const el = leftPaneRef.current;
-    if (!el || !baseDims) return;
-    const s = Math.min((el.clientWidth - 20) / baseDims.w, (el.clientHeight - 20) / baseDims.h);
-    setTransform({ scale: s, tx: (el.clientWidth - baseDims.w * s) / 2, ty: (el.clientHeight - baseDims.h * s) / 2 });
-  }, [baseDims]);
+    setViewMode('fit');
+    setTransform({ scale: 1, tx: 0, ty: 0 });
+  }, []);
 
   useEffect(() => {
-    if (baseDims && !wipe) fit();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseDims, wipe]);
+    fit();
+  }, [currentRun?.resultUrl, fit]);
+
+  useEffect(() => {
+    const left = leftPaneRef.current;
+    const right = rightPaneRef.current;
+    if (!left || !right) return;
+    const measure = () => setPaneSizes({
+      left: { w: left.clientWidth, h: left.clientHeight },
+      right: { w: right.clientWidth, h: right.clientHeight },
+    });
+    const observer = new ResizeObserver(measure);
+    observer.observe(left);
+    observer.observe(right);
+    measure();
+    return () => observer.disconnect();
+  }, [detail?.job.originalUrl, wipe]);
+
+  const frame = (dims: { w: number; h: number } | null, pane: { w: number; h: number }) => {
+    if (!dims) return { x: 0, y: 0, w: 0, h: 0, scale: 1 };
+    const fitted = Math.max(0, Math.min((pane.w - 20) / dims.w, (pane.h - 20) / dims.h));
+    const scale = (viewMode === 'native' ? 1 : fitted) * transform.scale;
+    const w = dims.w * scale;
+    const h = dims.h * scale;
+    return { x: (pane.w - w) / 2 + transform.tx, y: (pane.h - h) / 2 + transform.ty, w, h, scale };
+  };
+  const leftFrame = frame(baseDims, paneSizes.left);
+  const rightFrame = frame(resultDims, paneSizes.right);
 
   const onWheel = (e: React.WheelEvent) => {
     if (wipe || repairMode) return;
     e.preventDefault();
-    const el = leftPaneRef.current;
-    if (!el) return;
+    const el = e.currentTarget;
     const rect = el.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
     setTransform((t) => {
       const ns = Math.max(0.05, Math.min(8, t.scale * (e.deltaY > 0 ? 1 / 1.08 : 1.08)));
       const k = ns / t.scale;
-      return { scale: ns, tx: px - (px - t.tx) * k, ty: py - (py - t.ty) * k };
+      const cx = px - el.clientWidth / 2;
+      const cy = py - el.clientHeight / 2;
+      return { scale: ns, tx: cx - (cx - t.tx) * k, ty: cy - (cy - t.ty) * k };
     });
   };
 
@@ -115,17 +147,21 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
     pan.current.active = false;
   };
 
-  const imgStyle: React.CSSProperties = {
-    transform: `translate(${transform.tx}px, ${transform.ty}px) scale(${transform.scale})`,
-    width: baseDims?.w,
-    height: baseDims?.h,
-  };
+  const imageStyle = (dims: { w: number; h: number } | null, view: typeof leftFrame): React.CSSProperties => ({
+    transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+    width: dims?.w,
+    height: dims?.h,
+    visibility: dims && view.w > 0 ? 'visible' : 'hidden',
+  });
 
   /* ---------- repair overlay ---------- */
   const relPos = (e: React.MouseEvent): { x: number; y: number } => {
     const el = rightPaneRef.current!;
     const rect = el.getBoundingClientRect();
-    return { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
+    return {
+      x: Math.max(0, Math.min(1, (e.clientX - rect.left - rightFrame.x) / rightFrame.w)),
+      y: Math.max(0, Math.min(1, (e.clientY - rect.top - rightFrame.y) / rightFrame.h)),
+    };
   };
   const onRepairDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -302,9 +338,8 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
           className="btn btn-sm"
           onClick={() => {
             setWipe(false);
-            const el = leftPaneRef.current;
-            if (!el || !baseDims) return;
-            setTransform({ scale: 1, tx: (el.clientWidth - baseDims.w) / 2, ty: (el.clientHeight - baseDims.h) / 2 });
+            setViewMode('native');
+            setTransform({ scale: 1, tx: 0, ty: 0 });
           }}
         >
           1:1
@@ -336,11 +371,11 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
               onMouseUp={onPanEnd}
               onMouseLeave={onPanEnd}
             >
-              <span className="pane-label">原图</span>
+              <span className="pane-label">原图{baseDims && ` · ${baseDims.w} × ${baseDims.h}`}</span>
               <img
                 className="compare-img"
                 src={detail.job.originalUrl}
-                style={{ ...imgStyle, width: undefined, height: undefined, transform: imgStyle.transform }}
+                style={imageStyle(baseDims, leftFrame)}
                 onLoad={(e) => {
                   const im = e.currentTarget;
                   setBaseDims({ w: im.naturalWidth, h: im.naturalHeight });
@@ -354,16 +389,13 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
               ref={rightPaneRef}
               onWheel={onWheel}
               onMouseDown={(e) => {
-                if (repairMode) onRepairDown(e);
-                else onPanStart(e);
+                onPanStart(e);
               }}
               onMouseMove={(e) => {
-                if (repairMode) onRepairMove(e);
-                else onPanMove(e);
+                onPanMove(e);
               }}
               onMouseUp={() => {
-                if (repairMode) onRepairUp();
-                else onPanEnd();
+                onPanEnd();
               }}
               onMouseLeave={onPanEnd}
             >
@@ -371,15 +403,16 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
                 结果{currentRun ? ` · Run ${currentRun.seq}（${currentRun.type}）` : ''}
                 {currentRun?.elapsedMs != null && ` · ${fmtDuration(currentRun.elapsedMs)}`}
                 {currentRun && ` · ${fmtCost(currentRun.cost)}`}
+                {resultDims && ` · ${resultDims.w} × ${resultDims.h}`}
               </span>
               {currentRun?.resultUrl ? (
-                <img className="compare-img" src={currentRun.resultUrl} style={imgStyle} draggable={false} alt="" />
+                <img className="compare-img" src={currentRun.resultUrl} style={imageStyle(resultDims, rightFrame)} draggable={false} alt="" />
               ) : (
                 <div className="review-empty">{runActive ? '生成中…' : '该 Run 暂无结果图'}</div>
               )}
-              {repairMode && (
-                <div className="repair-overlay" onMouseDown={(e) => e.stopPropagation()} style={{ cursor: 'crosshair' }}>
-                  <div style={{ position: 'absolute', inset: 0 }} onMouseDown={onRepairDown} onMouseMove={onRepairMove} onMouseUp={onRepairUp} />
+              {repairMode && resultDims && (
+                <div className="repair-overlay" onMouseDown={(e) => e.stopPropagation()} style={{ cursor: 'crosshair', inset: 'auto', left: rightFrame.x, top: rightFrame.y, width: rightFrame.w, height: rightFrame.h }}>
+                  <div style={{ position: 'absolute', inset: 0 }} onMouseDown={onRepairDown} onMouseMove={onRepairMove} onMouseUp={onRepairUp} onMouseLeave={onRepairUp} />
                   {repairRects.map((r) => (
                     <div className="repair-rect" key={r.id} style={{ left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%`, borderColor: r.color }} />
                   ))}
@@ -414,12 +447,15 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
           <button className="btn" disabled={!currentRun || busy || runActive} onClick={() => void rerun()}>
             ↻ 重跑（以当前配置）
           </button>
-          <button className={cls('btn', repairMode && 'btn-primary')} disabled={!currentRun || busy || runActive || !currentRun.resultUrl} onClick={() => setRepairMode((v) => !v)}>
+          <button className={cls('btn', repairMode && 'btn-primary')} disabled={!currentRun || busy || runActive || !currentRun.resultUrl || !resultDims} onClick={() => {
+            if (!repairMode) { setWipe(false); fit(); }
+            setRepairMode((v) => !v);
+          }}>
             {repairMode ? '退出定点重修' : '✎ 定点重修'}
           </button>
           {repairMode && (
             <div>
-              <div className="form-hint">在右侧结果图上拖拽圈出问题区（每次生成前自动适配窗口）</div>
+              <div className="form-hint">在右侧结果图上拖拽圈出问题区（进入重修时自动适配窗口）</div>
               {repairRects.map((r, i) => (
                 <div className="prompt-block" key={r.id} style={{ marginTop: 8 }}>
                   <div className="prompt-block-head">
