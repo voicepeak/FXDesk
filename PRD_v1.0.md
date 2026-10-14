@@ -1,9 +1,9 @@
-# 《后期特效合成工作台》产品需求文档（PRD）v1.0 — Agent 施工版
+# 《后期特效合成工作台》产品需求文档（PRD）v1.1 — Agent 施工版
 
 > 代号：FXDesk（可改）
 > 文档性质：**实现级 PRD**。施工方（人类开发者或 AI Agent）应能在不追加需求沟通的情况下完成 v1 开发、自测、验收。
 > 生成依据：本产品需求来自与产品负责人的逐条确认（见正文引用），并借鉴了「TT AI v1.8.8 Photoshop 插件」逆向分析中的可用设计（见附录 D）。
-> 修订记录：v1.0 初稿。
+> 修订记录：v1.0 初稿；**v1.1：交付图强制回填至原图分辨率（新增"超分回填"强制工序，见 §4.6.8 与附录 E）**。
 
 ---
 
@@ -12,7 +12,7 @@
 1. **技术栈锁定，不得更换**（除标注"可替换"处）：
    - 语言：TypeScript（全栈）
    - 运行时：Node.js ≥ 22（Windows 10/11 x64 为第一目标平台）
-   - 后端：Fastify + better-sqlite3 + sharp + onnxruntime-node
+   - 后端：Fastify + better-sqlite3 + sharp + onnxruntime-node；本地超分引擎：realesrgan-ncnn-vulkan（缺失/失败自动降级 Lanczos）
    - 前端：React 18 + Vite + TypeScript + react-konva（标注画布）
    - 队列：进程内队列（p-queue），任务状态持久化到 SQLite
    - 实时进度：SSE（Server-Sent Events）
@@ -36,6 +36,7 @@
 ### 1.3 v1 范围
 - 单张场照的**多区域添加元素 + 全局换背景**一次生成
 - 4K 直接输出；单张生成（不做变体）；无参考图预处理（见 backlog）
+- **交付图强制回填至原图分辨率**：最终交付图宽高必须与原图逐像素一致（强制工序，§4.6.8）
 - 自动质检（身份/构图自动，元素人工确认）
 - 任务队列、费用记录、失败重试
 - 素材库（素材/收藏夹/历史成果三区）、自动归档、复用配方、惰性净版提取
@@ -76,6 +77,7 @@
     → [填全局指令: 换背景XX] → [提示词总览自动拼装(只读预览)]
     → [点击"开始生成"] → 入队
         └─ 队列执行: 渲染标记图 → 调墨墨API(4K) → 下载结果
+            → 超分回填(至原图分辨率，强制)
             → 自动质检(身份/构图) → [不达标→直接转人工; 中分→自动面部重修1次]
         → [进入待审核] → 人工审核
             ├─ [通过交付] → 自动归档(recipe+成片+自动打标) → 完成
@@ -183,25 +185,54 @@ review → delivered（终态，触发归档）
 - 4.6.2 Run 执行步骤（每步进度通过 SSE 推送）：
   1. `uploading`：准备 base64（标记图 + 各参考图按顺序）
   2. `generating`：调用墨墨 API（§7）
-  3. `downloading`：解析响应 base64，保存 `result_v{n}.png/jpg`
-  4. `qc`：执行质检（§4.7）
-  5. 结束：进入 `review` 或由质检决定自动重修
-- 4.6.3 模型与参数：模型 ID 来自设置（默认 `[Mo]nano-banana-pro`）；`imageSize` 默认 `4K`（设置可改 1K/2K/4K）；`aspectRatio` 默认不传（跟随输入图）；不传其他未定义字段。
+  3. `downloading`：解析响应 base64，保存原始返回 `result_v{n}.png/jpg`
+  4. `upscaling`：**超分回填至原图分辨率（强制，规格见 §4.6.8）**，输出 `result_final.png`
+  5. `qc`：在最终交付图上执行质检（§4.7）
+  6. 结束：进入 `review` 或由质检决定自动重修
+- 4.6.3 模型与参数：模型 ID 来自设置（默认 `[Mo]nano-banana-pro`）；`imageSize` 默认 `4K`（设置可改 1K/2K/4K，**仅为生成档位；交付分辨率由 §4.6.8 强制回填至原图**）；`aspectRatio` 默认不传（跟随输入图）；不传其他未定义字段。
 - 4.6.4 单次生成，无变体（负责人决策：控制成本）。
-- 4.6.5 超时：单 Run 300 秒；网络错误自动重试 3 次（指数退避 2s/8s/20s）；仍失败 → `failed` + 任务栏红标 + 通知。
+- 4.6.5 超时：生成网络阶段单 Run 300 秒；**超分阶段独立限额 900 秒**（设置 `upscale.timeoutSec` 可调，不占用生成配额）；网络错误自动重试 3 次（指数退避 2s/8s/20s）；仍失败 → `failed` + 任务栏红标 + 通知。
 - 4.6.6 费用记录：每次 Run 按设置中的"单张价格"（默认 ¥0.30，可改）记入 `runs.cost`，任务栏与客单页显示累计费用与本月合计。
-- 4.6.7 请求存档：`request.json` 记录模型、参数、最终提示词、参考图文件清单、标记图路径、时间、耗时、费用（**不含 API Key**）。
+- 4.6.7 请求存档：`request.json` 记录模型、参数、最终提示词、参考图文件清单、标记图路径、时间、耗时、费用（**不含 API Key**）；超分信息写入 `request.json.upscale`（字段见 §4.6.8）。
+
+### 4.6.8 超分回填（强制）[P0]
+
+- **核心规则（不可关闭）**：最终交付图 `result_final.png` 的宽高必须与原图宽高**逐像素相等**。进入 QC 前执行断言 `final.width === original.width && final.height === original.height`，不满足不得进入 QC。
+- 引擎（设置项 `upscale.engine`）：
+  - `realesrgan`（默认）：本地 Real-ESRGAN（realesrgan-ncnn-vulkan），tile 模式防大图爆内存（`-t 512`），`-s 4` 超分后 Lanczos 缩至精确目标；模型 `realesrgan-x4plus`
+  - `lanczos`：sharp 直接缩放（零依赖兜底）
+  - **自动降级**：引擎可执行文件/模型缺失或运行失败 → 自动改用 lanczos，并在事件日志与审核界面标注"已降级为 Lanczos（细节未增强）"
+- 算法（伪代码）：
+  ```
+  W,H = 原图宽高；w,h = 模型输出宽高
+  scale = max(W/w, H/h)
+  if scale <= 1.05: engine = lanczos                  # 差距极小，普通缩放无感
+  aspectRatioDiff = |(W/H) - (w/h)| / (W/H)
+  if aspectRatioDiff > 0.02:                          # 宽高比偏差 >2%
+      resizeCover 至覆盖 W×H → 中心裁剪到 W×H；写入 QC 警告 "宽高比偏差已裁剪"
+  else:
+      超分/放大 → 精确缩放到 W×H                       # 偏差 ≤2% 时拉伸影响 <0.6%，不可感知
+  保留原图色彩配置（ICC，若存在）
+  ```
+- 运行方式：独立子进程/工作线程，不阻塞事件循环；SSE 推送 `upscaling` 阶段开始/结束与耗时。
+- 记录（写入 `request.json` 并同步 `runs.upscale_json`）：
+  ```json
+  "upscale": { "engine": "realesrgan", "from": "3392x5056", "to": "4096x6144",
+               "scaleFactor": 1.208, "cropped": false, "elapsedMs": 83000 }
+  ```
+- 安装：`scripts/setup-upscaler.mjs` 下载 realesrgan-ncnn-vulkan 至 `tools/realesrgan/`（支持环境变量 `UPSCALER_MIRROR` 镜像；失败不阻断，按降级处理）。
+- 失败处理：超分超时或两次失败 → 先用 lanczos 兜底保证尺寸断言通过；lanczos 也失败 → Run `failed(UPSACLE_FAILED)`。
 
 ### 4.7 自动质检（QC）[P0]
 
 - 4.7.1 身份检测（自动，核心）：
   - 本地人脸检测 + 特征比对（onnxruntime-node，模型文件由 `scripts/setup-models.mjs` 下载，见附录 C）
-  - 取原图最大人脸特征 vs 结果图中位置最接近的人脸特征，计算余弦相似度 `sim`
+  - 取原图最大人脸特征 vs **最终交付图**（已回填原图分辨率）中位置最接近的人脸特征，计算余弦相似度 `sim`
   - 判定：`sim ≥ 0.62` 通过；`0.50 ≤ sim < 0.62` 中分 → **自动触发面部重修**（4.7.4）；`sim < 0.50` 不达标 → 直接转人工（负责人决策：不自动重跑）
   - 未检测到人脸（侧脸/遮挡）：标记 `identity: skipped`，转人工目检
   - 模型文件缺失时：QC 显示"身份检测未启用（模型未安装）"，转人工目检（不阻断流程）
 - 4.7.2 构图检测（自动）：
-  - 原图与结果图做 SSIM（缩放到 512 长边）+ pHash 汉明距离
+  - 原图与最终交付图做 SSIM（两者尺寸已一致，统一缩放到 512 长边）+ pHash 汉明距离
   - `SSIM ≥ 0.55 且 pHash距离 ≤ 16`：通过；否则标记 `composition: shifted` 并**在审核界面高亮提示**"构图可能偏移，请目检"（不阻断、不自动重跑）
 - 4.7.3 元素确认（v1 人工）：结果图与区域指令并排展示，审核员逐条勾选"剑✓ 闪电✓"（勾选结果入档；为 P2 自动检测留接口 `qc.elements`）
 - 4.7.4 面部重修（第二防线，自动 1 次）：
@@ -268,12 +299,14 @@ review → delivered（终态，触发归档）
 | API | 余额显示 | — | 调 `GET /api/usage/token/`（见 §7.3）显示在顶栏，每 10 分钟刷新、可手动刷新 |
 | 队列 | 并发数 | 2 | 1~4 |
 | 队列 | 单 Run 超时 | 300 秒 | |
+| 超分 | 超分引擎 | `realesrgan` | realesrgan / lanczos；**交付=原图分辨率强制开启** |
+| 超分 | 超分超时 | 900 秒 | 独立于生成超时 |
 | 通知 | 提示音/系统通知 | 开 | |
 | 质检 | 身份通过阈值 | 0.62 | |
 | 质检 | 身份中分下限 | 0.50 | |
 | 质检 | 自动面部重修 | 开 | |
 | 提示词 | 系统块/收尾块/各模板 | 附录 A 全文 | 可视化编辑，占位符 `{{}}` 不可删改 |
-| 素材 | 发送长边上限 | 4096 | |
+| 素材 | 发送长边上限 | 4096 | 超限等比缩小后发送；追求输入保真可设 6144（体积更大） |
 | 存储 | 工作区路径 | `./workspace` | 可改（需重启） |
 
 ### 4.12 文件与目录结构 [P0]
@@ -290,7 +323,7 @@ workspace/
     02_runs/run_0001/
       request.json           # 完整请求档案（无 Key）
       result.png             # 原始返回
-      result_final.png       # 后处理(如面部重修合成)后的最终版
+      result_final.png       # 超分回填/面部重修后的最终版（尺寸==原图）
       qc.json
     03_delivery/final_v2.png
     recipe.json
@@ -314,6 +347,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft',   -- draft|queued|generating|qc|review|repairing|failed|delivered|canceled
   original_path TEXT NOT NULL,
+  orig_width INTEGER,                 -- 原图宽（交付分辨率断言用）
+  orig_height INTEGER,                -- 原图高
   global_instruction TEXT DEFAULT '',
   character TEXT DEFAULT '',          -- 角色名（选填，用于标签）
   final_run_id TEXT,
@@ -356,6 +391,7 @@ CREATE TABLE IF NOT EXISTS runs (
   result_path TEXT,
   result_final_path TEXT,
   qc_json TEXT,
+  upscale_json TEXT,                  -- 超分回填记录
   cost REAL DEFAULT 0,
   elapsed_ms INTEGER,
   error TEXT,
@@ -647,8 +683,8 @@ cx = (x1+x2)/2 / W;  cy = (y1+y2)/2 / H
 1. 启动：`npm run setup && npm run dev` → 打开 `http://localhost:5173` 无报错；设置页填写 Key 后 [测试连接] 成功，顶栏显示余额
 2. 新建客单：导入一张测试场照；添加客户素材（一张剑图）；从库添加一张素材（预先手动入库一张"闪电"）
 3. 标注：画 2 个框；区域条目自动出现（红①/黄②）；分别填"手里加参考图1的剑…""身体周围加参考图2的闪电…"；全局填"背景换成雨夜街道…"
-4. 生成：点开始生成 → 任务栏出现卡片（排队→生成中→质检）；SSE 进度变化正常；约 1~3 分钟出结果；费用入账（0.30）
-5. 结果检查：成品图中两处元素存在、背景已换；**图中无任何彩色框与编号残留**；QC 横幅显示身份分与构图结论
+4. 生成：点开始生成 → 任务栏出现卡片（排队→生成中→超分中→质检）；SSE 进度变化正常；出结果；费用入账（0.30）
+5. 结果检查：**交付图宽高与原图逐像素一致（断言通过，如 4096×6144）**；成品图中两处元素存在、背景已换；**图中无任何彩色框与编号残留**；QC 横幅显示身份分与构图结论
 6. 审核：[通过交付] → 状态 delivered；`03_delivery/final_v1.png` 存在
 7. 归档：素材库"历史成果"出现该 Job（自动标签含"剑、闪电"与颜色）；搜索"闪电"能找到；⭐ 收藏生效
 8. 提取净版：对历史 Job 点 [提取净版] → 素材库出现 candidate 净版（黑底、无人物）；⭐ 后进入收藏夹
@@ -656,6 +692,7 @@ cx = (x1+x2)/2 / W;  cy = (y1+y2)/2 / H
 10. 重修回路：对某 Run 点 [定点重修] → 画一个框填修复指令 → 产生新 Run 且 QC 重新执行
 11. 中断恢复：生成中杀进程重启 → 队列显示 interrupted 可重试
 12. 失败路径：填错 Key → 生成失败红标 + 通知；[重试] 改 Key 后成功
+13. 超分回填专项：① 交付尺寸断言通过；② 将 `tools/realesrgan` 改名后重新生成 → 交付仍为原图分辨率，界面/日志出现"已降级为 Lanczos"提示
 
 ### 12.2 单元测试（vitest）
 - 提示词拼装器：给定 2 区域+全局 → 快照断言全文（含方位描述、参考图编号）
@@ -664,6 +701,7 @@ cx = (x1+x2)/2 / W;  cy = (y1+y2)/2 / H
 - 方位描述算法：九宫格 9 个用例 + 面积 3 档
 - QC 阈值：mock 特征向量，验证 3 档分流（含面部重修触发）
 - 净版/recipe 归档：交付后 DB 与文件系统断言
+- 超分回填：结果 3392×5056 + 原图 4096×6144 → 输出精确 4096×6144；scale≤1.05 走 Lanczos 分支；宽高比偏差>2% 触发 cover 裁剪+警告；引擎缺失自动降级
 
 ---
 
@@ -671,7 +709,7 @@ cx = (x1+x2)/2 / W;  cy = (y1+y2)/2 / H
 
 - **M1 地基**：项目脚手架（前后端）→ SQLite + 设置页 + SSE → 墨墨连接测试/余额
 - **M2 编辑态**：客单 CRUD → 素材导入 → 标注画布（react-konva）→ 提示词总览 + 拼装器（含单测）
-- **M3 生成链**：标记渲染器（含单测）→ 队列 + 任务栏 → 生成管线（含重试）→ 下载落盘
+- **M3 生成链**：标记渲染器（含单测）→ 队列 + 任务栏 → 生成管线（含重试）→ 下载落盘 → 超分回填至原图分辨率（强制断言 + 降级路径）
 - **M4 质检与审核**：身份/构图 QC（含模型安装脚本）→ 面部重修自动触发 → 审核界面（对比/重修/重跑）
 - **M5 素材库与归档**：三区 UI → 自动归档+标签 → 搜索 → 复用配方 → 惰性净版 → 验收（§12）→ ACCEPTANCE.md
 
@@ -689,8 +727,27 @@ cx = (x1+x2)/2 / W;  cy = (y1+y2)/2 / H
 | 团队多用户/审核协作 | 单机 v1 |
 | 视频特效线 | 独立产品线 |
 | 净版自动标签/去重（pHash） | 入库标准化二期 |
+| 云端超分引擎（SeedVR2 / RH API） | 本地 ESRGAN 效果不足时的可选高质量引擎 |
 | macOS/Linux 支持 | 非目标 |
 | Key 强加密（DPAPI） | 现为 obf 混淆，待升级 |
+
+---
+
+## 15. 附录 E：v1.1 增量变更清单（给施工 Agent）
+
+若 v1.0 已开工，按以下增量修改（未提及部分不变）：
+
+1. **管线**：新增强制步骤，顺序为 `downloading → upscaling → qc`；Run 阶段与 SSE 事件增加 `upscaling`
+2. **新增 §4.6.8 超分回填规格**：引擎 / 算法 / 尺寸断言 / 自动降级 / 安装脚本 / 记录字段
+3. **DB 迁移**（建库时直接并入 §5 最新 DDL）：
+   - `ALTER TABLE jobs ADD COLUMN orig_width INTEGER;`
+   - `ALTER TABLE jobs ADD COLUMN orig_height INTEGER;`
+   - `ALTER TABLE runs ADD COLUMN upscale_json TEXT;`
+4. **设置新增**：`upscale.engine`（默认 `realesrgan`）、`upscale.timeoutSec`（默认 900）；交付分辨率=原图，**强制不可关闭**
+5. **QC 输入**改为最终交付图（尺寸==原图），SSIM 判定基准同步更新
+6. **验收新增**：§12.1 第 13 项（尺寸断言 + 降级演练）、§12.2 超分单测
+7. **安装脚本新增**：`scripts/setup-upscaler.mjs`（下载 realesrgan-ncnn-vulkan 至 `tools/realesrgan/`，支持镜像环境变量 `UPSCALER_MIRROR`，失败不阻断）
+8. **目录新增**：`tools/realesrgan/`（超分引擎与模型，位于应用根目录，非 workspace 内）
 
 ---
 

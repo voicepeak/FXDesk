@@ -180,8 +180,8 @@ export function registerJobsRoutes(app: FastifyInstance): void {
     const imported = await importOriginal(dir, original.filename, original.buf);
     const now = Date.now();
     db.prepare(
-      'INSERT INTO jobs (id, name, status, original_path, global_instruction, character, cost_total, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)'
-    ).run(id, name, 'draft', rel(imported.normalizedPath), '', fields.character ?? '', now, now);
+      'INSERT INTO jobs (id, name, status, original_path, global_instruction, character, orig_width, orig_height, cost_total, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)'
+    ).run(id, name, 'draft', rel(imported.normalizedPath), '', fields.character ?? '', imported.width, imported.height, now, now);
     writeJobSnapshot(id);
     logEvent('info', `新建客单 ${id}（${name}）`, { jobId: id });
     emitJobUpdate(id);
@@ -205,6 +205,7 @@ export function registerJobsRoutes(app: FastifyInstance): void {
       rawUrl: r.result_path ? `/api/files/${r.result_path}` : null,
       markerUrl: r.marker_path ? `/api/files/${r.marker_path}` : null,
       qc: r.qc_json ? JSON.parse(r.qc_json) : null,
+      upscale: r.upscale_json ? JSON.parse(r.upscale_json) : null,
       finalPrompt: r.final_prompt,
       cost: r.cost,
       elapsedMs: r.elapsed_ms,
@@ -272,7 +273,13 @@ export function registerJobsRoutes(app: FastifyInstance): void {
     const original = files.find((f) => f.fieldname === 'original');
     if (!original) throw apiError(400, 'NO_ORIGINAL', '缺少原图文件');
     const imported = await importOriginal(ws('jobs', id), original.filename, original.buf);
-    db.prepare('UPDATE jobs SET original_path=?, updated_at=? WHERE id=?').run(rel(imported.normalizedPath), Date.now(), id);
+    db.prepare('UPDATE jobs SET original_path=?, orig_width=?, orig_height=?, updated_at=? WHERE id=?').run(
+      rel(imported.normalizedPath),
+      imported.width,
+      imported.height,
+      Date.now(),
+      id
+    );
     writeJobSnapshot(id);
     emitJobUpdate(id);
     return { ok: true, width: imported.width, height: imported.height };

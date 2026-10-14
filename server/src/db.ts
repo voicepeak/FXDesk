@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   global_instruction TEXT DEFAULT '',
   character TEXT DEFAULT '',
   final_run_id TEXT,
+  orig_width INTEGER,
+  orig_height INTEGER,
   cost_total REAL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -51,6 +53,7 @@ CREATE TABLE IF NOT EXISTS runs (
   result_path TEXT,
   result_final_path TEXT,
   qc_json TEXT,
+  upscale_json TEXT,
   cost REAL DEFAULT 0,
   elapsed_ms INTEGER,
   error TEXT,
@@ -99,12 +102,27 @@ CREATE TABLE IF NOT EXISTS events_log (
 
 let db: Database.Database | null = null;
 
+function tableColumns(d: Database.Database, table: string): Set<string> {
+  const rows = d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return new Set(rows.map((r) => r.name));
+}
+
+/** 老库增量迁移（PRD v1.1 附录 E：超分回填字段） */
+function migrate(d: Database.Database): void {
+  const jobCols = tableColumns(d, 'jobs');
+  if (!jobCols.has('orig_width')) d.exec('ALTER TABLE jobs ADD COLUMN orig_width INTEGER');
+  if (!jobCols.has('orig_height')) d.exec('ALTER TABLE jobs ADD COLUMN orig_height INTEGER');
+  const runCols = tableColumns(d, 'runs');
+  if (!runCols.has('upscale_json')) d.exec('ALTER TABLE runs ADD COLUMN upscale_json TEXT');
+}
+
 export function openDb(dbPath?: string): Database.Database {
   ensureWorkspaceDirs();
   const target = dbPath ?? ws('db.sqlite');
   const d = new Database(target);
   d.pragma('journal_mode = WAL');
   d.exec(DDL);
+  migrate(d);
   db = d;
   return d;
 }

@@ -14,7 +14,12 @@ export interface Bbox {
   y1: number;
   x2: number;
   y2: number;
+  shape?: 'rect' | 'ellipse' | 'polygon' | 'lasso';
+  /** Polygon vertices relative to this box, in the range 0–1. */
+  points?: { x: number; y: number }[];
 }
+
+export type SelectionTool = 'select' | 'rect' | 'ellipse' | 'polygon' | 'lasso';
 
 export interface RefToken {
   materialId: string;
@@ -38,7 +43,7 @@ export interface JobSummary {
 
 export interface Material {
   id: string;
-  source: 'client' | 'library';
+  source: 'client' | 'library' | 'web';
   libraryItemId: string | null;
   displayName: string;
   fileUrl: string | null;
@@ -68,6 +73,19 @@ export interface QcResult {
   faceRepair?: { triggered: boolean; runId?: string; status?: string; error?: string } | null;
 }
 
+export interface UpscaleInfo {
+  engine: 'realesrgan' | 'lanczos';
+  model?: string;
+  degraded?: boolean;
+  degradeReason?: string;
+  from: string;
+  to: string;
+  scaleFactor: number;
+  cropped: boolean;
+  elapsedMs: number;
+  iccPreserved?: boolean;
+}
+
 export interface Run {
   id: string;
   seq: number;
@@ -78,6 +96,7 @@ export interface Run {
   rawUrl: string | null;
   markerUrl: string | null;
   qc: QcResult | null;
+  upscale: UpscaleInfo | null;
   finalPrompt: string | null;
   cost: number;
   elapsedMs: number | null;
@@ -138,6 +157,7 @@ export interface LibraryItem {
 export interface Settings {
   apiKey: string;
   baseUrl: string;
+  provider: 'auto' | 'momo' | 'grsai';
   modelId: string;
   imageSize: '1K' | '2K' | '4K';
   aspectRatio: string;
@@ -157,6 +177,8 @@ export interface Settings {
   tplRepair: string;
   tplPlate: string;
   sendMaxDimension: number;
+  upscaleEngine: 'realesrgan' | 'lanczos';
+  upscaleTimeoutSec: number;
   workspacePath: string;
   mockApi: boolean;
   materialSoftLimit: number;

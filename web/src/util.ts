@@ -108,6 +108,7 @@ export const STAGE_LABELS: Record<string, string> = {
   generating: '生成中',
   retrying: '限流重试中',
   downloading: '下载中',
+  upscaling: '超分中',
   qc: '质检中',
   review: '待审核',
   failed: '失败',

@@ -27,6 +27,18 @@ afterAll(async () => {
 });
 
 describe('生成请求等待与避免重复提交（仅访问本地假服务）', () => {
+  it('发送本次生成的主图比例，并保留原有 4K 设置', async () => {
+    let received: any;
+    handler = (req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => { received = JSON.parse(body); res.end(JSON.stringify(image)); });
+    };
+    await generateContent({ ...options({ aspectRatio: '16:9', imageSize: '4K' }), aspectRatio: '3:4' });
+    expect(received.generationConfig.imageConfig).toEqual({ imageSize: '4K', aspectRatio: '3:4' });
+    expect(calls).toBe(1);
+  });
+
   it('慢响应在等待预算内只提交一次，正确读取图片', async () => {
     handler = (_req, res) => { setTimeout(() => { res.setHeader('x-request-id', 'remote-test'); res.end(JSON.stringify(image)); }, 150); };
     expect((await generateContent(options())).base64).toBe('aW1hZ2U=');

@@ -33,6 +33,8 @@ export interface GenerateOptions {
   prompt: string;
   signal?: AbortSignal;
   settings?: AppSettings;
+  /** Per-run canvas ratio, derived from the main image when settings are automatic. */
+  aspectRatio?: string;
   /** mock 模式下返回的图片（模拟模型返回），由管线提供 */
   mockReturn?: ImagePart;
   context?: { jobId: string; runId: string };
@@ -114,7 +116,7 @@ export async function generateContent(opts: GenerateOptions): Promise<GenerateRe
     ],
     generationConfig: {
       responseModalities: ['IMAGE'],
-      imageConfig: { imageSize: s.imageSize, ...(s.aspectRatio ? { aspectRatio: s.aspectRatio } : {}) },
+      imageConfig: { imageSize: s.imageSize, ...((opts.aspectRatio ?? s.aspectRatio) ? { aspectRatio: opts.aspectRatio ?? s.aspectRatio } : {}) },
     },
   };
 

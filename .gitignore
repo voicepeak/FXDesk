@@ -3,5 +3,6 @@ workspace/
 fxdesk.config.json
 web/dist/
 server/dist/
+tools/
 *.log
 .DS_Store

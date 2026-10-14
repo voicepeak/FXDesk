@@ -10,10 +10,12 @@ import { logEvent, logLine } from './logger';
 import { assemblePrompt, applyTemplate, colorName, locationOf, parseBbox } from './prompt';
 import type { AssembleTemplates } from './prompt';
 import { renderMarkers } from './markers';
+import { canvasConstraint, closestAspectRatio } from './imageGeometry';
 import { generateWithFallback, MomoError, type ImagePart } from './momo';
 import { runIdentityCheck } from './qc';
 import { analyzeComposition } from './qc/composition';
 import { performFaceRepair } from './qc/faceRepair';
+import { upscaleToOriginal } from './upscale';
 import { extractNouns } from './tagging';
 import { emitJobUpdate, emitRunProgress } from './sse';
 import { notifyComplete, notifyFail } from './notify';
@@ -39,6 +41,7 @@ interface ActiveInfo {
 interface RunPrep {
   images: ImagePart[];
   prompt: string;
+  aspectRatio: string;
   mockReturn: ImagePart;
   markerPath: string | null;
   requestMeta: Record<string, unknown>;
@@ -168,7 +171,7 @@ export class QueueManager {
     this.active.set(jobId, info);
     const stage = (s: string) => {
       info.stage = s;
-      if (!['generating', 'retrying'].includes(s)) { info.message = undefined; info.retryAt = undefined; }
+      if (!['generating', 'retrying', 'upscaling'].includes(s)) { info.message = undefined; info.retryAt = undefined; }
       const elapsed = Date.now() - startedAt;
       emitRunProgress(runId, jobId, s, elapsed, undefined, { attempt: info.attempt, message: info.message, retryAt: info.retryAt });
       emitJobUpdate(jobId, { stage: s, elapsed });
@@ -197,6 +200,7 @@ export class QueueManager {
         prompt: prep.prompt,
         signal: ctrl.signal,
         settings,
+        aspectRatio: prep.aspectRatio,
         mockReturn: prep.mockReturn,
         context: { jobId, runId },
         onProgress: (progress) => {
@@ -224,6 +228,38 @@ export class QueueManager {
       );
       db.prepare('UPDATE jobs SET cost_total = cost_total + ?, updated_at=? WHERE id=?').run(runCost, Date.now(), jobId);
 
+      const origAbs = abs(job.original_path);
+      stage('upscaling');
+      let finalAbs = resultAbs;
+      try {
+        const original = await ensureOriginalSize(job, origAbs);
+        const upscaleOut = path.join(runDir, 'result_final.png');
+        const upsc = await upscaleToOriginal({
+          srcPath: resultAbs,
+          outPath: upscaleOut,
+          origPath: origAbs,
+          origW: original.width,
+          origH: original.height,
+          engine: settings.upscaleEngine,
+          timeoutSec: settings.upscaleTimeoutSec,
+          signal: ctrl.signal,
+          onProgress: (message) => {
+            info.message = message;
+            stage('upscaling');
+          },
+        });
+        if (ctrl.signal.aborted) throw ctrl.signal.reason;
+        finalAbs = upscaleOut;
+        prep.requestMeta.upscale = upsc;
+        db.prepare('UPDATE runs SET result_final_path=?, upscale_json=? WHERE id=?').run(rel(upscaleOut), JSON.stringify(upsc), runId);
+        logEvent('info', `超分回填完成（${upsc.engine}${upsc.degraded ? '·已降级' : ''}）：${upsc.from} → ${upsc.to}，耗时 ${Math.round(upsc.elapsedMs / 1000)} 秒`, { jobId, runId });
+        emitJobUpdate(jobId, { stage: 'upscaling', elapsed: Date.now() - startedAt });
+      } catch (e) {
+        if (ctrl.signal.aborted || (e instanceof MomoError && e.code === 'CANCELED')) throw e;
+        if (e instanceof MomoError && e.code === 'UPSCALE_FAILED') throw e;
+        throw new MomoError('UPSCALE_FAILED', e instanceof Error ? e.message : String(e));
+      }
+
       stage('qc');
       db.prepare("UPDATE runs SET status='qc' WHERE id=?").run(runId);
       db.prepare('UPDATE jobs SET status=?, updated_at=? WHERE id=?').run(isRepair ? 'repairing' : 'qc', Date.now(), jobId);
@@ -235,20 +271,18 @@ export class QueueManager {
         faceRepair: null,
       };
 
-      const origAbs = abs(job.original_path);
       try {
-        qc.composition = await analyzeComposition(origAbs, resultAbs);
+        qc.composition = await analyzeComposition(origAbs, finalAbs);
       } catch (e) {
         logLine('warn', `构图检测失败：${String(e)}`);
       }
 
-      let finalAbs = resultAbs;
       let finalRunId = runId;
       try {
-        const idr = await runIdentityCheck(origAbs, resultAbs, settings);
+        const idr = await runIdentityCheck(origAbs, finalAbs, settings);
         qc.identity = idr.identity;
         if (idr.shouldRepair) {
-          const fr = await this.runFaceRepairInline(job, run, origAbs, resultAbs, settings, qc, startedAt);
+          const fr = await this.runFaceRepairInline(job, run, origAbs, finalAbs, settings, qc, startedAt);
           if (fr) {
             finalAbs = fr.finalAbs;
             finalRunId = fr.runId;
@@ -449,12 +483,15 @@ export class QueueManager {
             repairInstruction: r.instruction,
           })
         );
-      const prompt = [...lines, settings.tplEnding].join('\n');
-      const markerPart = await imagePartFromFile(markerPathAbs, settings.sendMaxDimension, true);
+      const aspectRatio = settings.aspectRatio.trim() || closestAspectRatio(rendered.width, rendered.height);
+      const prompt = [canvasConstraint(aspectRatio, false), ...lines, settings.tplEnding].join('\n');
+      const fitted = await fitSendParts([{ fileAbs: markerPathAbs, kind: 'marker' }], settings.sendMaxDimension);
+      const markerPart = fitted.parts[0];
       const mockPart = await imagePartFromFile(baseAbs, settings.sendMaxDimension);
       return {
         images: [markerPart],
         prompt,
+        aspectRatio,
         mockReturn: mockPart,
         markerPath: rel(markerPathAbs),
         requestMeta: {
@@ -463,6 +500,7 @@ export class QueueManager {
           baseImage: base?.result_final_path || base?.result_path,
           repairRegions,
           marker: { width: rendered.width, height: rendered.height, scale: rendered.scale },
+          markerSent: { width: markerPart.width ?? 0, height: markerPart.height ?? 0, mime: markerPart.mime, bytes: markerPart.bytes },
         },
       };
     }
@@ -493,18 +531,31 @@ export class QueueManager {
       H,
     });
 
-    const materialParts: { refNo: number; displayName: string; source: string; libraryItemId: string | null; file: string; width: number; height: number; bytes: number }[] = [];
-    const images: ImagePart[] = [await imagePartFromFile(markerPathAbs, settings.sendMaxDimension, true)];
+    const materialRows = materials.map((m) => {
+      const fileAbs = (m.source === 'client' || m.source === 'web') && m.file_path ? abs(m.file_path) : libraryFileAbs(m.library_item_id);
+      return { m, fileAbs: fileAbs && fs.existsSync(fileAbs) ? fileAbs : null };
+    });
 
-    for (const m of materials) {
-      const fileAbs = m.source === 'client' && m.file_path ? abs(m.file_path) : libraryFileAbs(m.library_item_id);
-      if (!fileAbs || !fs.existsSync(fileAbs)) {
-        materialParts.push({ refNo: m.order_index, displayName: m.display_name, source: m.source, libraryItemId: m.library_item_id, file: '', width: 0, height: 0, bytes: 0 });
-        continue;
+    const fitted = await fitSendParts(
+      [
+        { fileAbs: markerPathAbs, kind: 'marker' },
+        ...materialRows.filter((r) => r.fileAbs).map((r) => ({ fileAbs: r.fileAbs!, kind: 'material' as const })),
+      ],
+      settings.sendMaxDimension
+    );
+    if (fitted.chosenMaxDim !== settings.sendMaxDimension) {
+      logLine('warn', `发送体积超过 ${Math.round(TOTAL_SIZE_LIMIT / 1048576)}MB 上限，已降档发送（长边 ${fitted.chosenMaxDim}px，标记图 ${fitted.markerMime}）`);
+    }
+    const images: ImagePart[] = fitted.parts;
+    const markerSent = fitted.parts[0];
+
+    let partIdx = 1;
+    const materialParts = materialRows.map(({ m, fileAbs }) => {
+      if (!fileAbs) {
+        return { refNo: m.order_index, displayName: m.display_name, source: m.source, libraryItemId: m.library_item_id, file: '', width: 0, height: 0, bytes: 0 };
       }
-      const part = await imagePartFromFile(fileAbs, settings.sendMaxDimension);
-      images.push(part);
-      materialParts.push({
+      const part = fitted.parts[partIdx++]!;
+      return {
         refNo: m.order_index,
         displayName: m.display_name,
         source: m.source,
@@ -513,21 +564,15 @@ export class QueueManager {
         width: part.width ?? 0,
         height: part.height ?? 0,
         bytes: part.bytes,
-      });
-    }
-
-    // 合计体积控制
-    let total = images.reduce((s, i) => s + i.base64.length, 0);
-    if (total > TOTAL_SIZE_LIMIT) {
-      const reduced = await shrinkParts([markerPathAbs, ...materials.map((m) => (m.source === 'client' && m.file_path ? abs(m.file_path) : libraryFileAbs(m.library_item_id))).filter((p): p is string => !!p && fs.existsSync(p))], 2048, true);
-      if (reduced.length) images.splice(0, images.length, ...reduced);
-      total = images.reduce((s, i) => s + i.base64.length, 0);
-    }
+      };
+    });
 
     const mockPart = await imagePartFromFile(origAbs, settings.sendMaxDimension);
+    const aspectRatio = settings.aspectRatio.trim() || closestAspectRatio(W, H);
     return {
       images,
-      prompt: assembled.finalPrompt,
+      prompt: [canvasConstraint(aspectRatio, images.length > 1), assembled.finalPrompt].join('\n'),
+      aspectRatio,
       mockReturn: mockPart,
       markerPath: rel(markerPathAbs),
       requestMeta: {
@@ -543,6 +588,7 @@ export class QueueManager {
         globalInstruction: job.global_instruction,
         materials: materialParts,
         marker: { width: rendered.width, height: rendered.height, scale: rendered.scale },
+        markerSent: { width: markerSent.width ?? 0, height: markerSent.height ?? 0, mime: markerSent.mime, bytes: markerSent.bytes },
       },
     };
   }
@@ -556,7 +602,7 @@ export class QueueManager {
         runId: run.id,
         seq: run.seq,
         type: run.type,
-        model: { id: settings.modelId, imageSize: settings.imageSize, aspectRatio: settings.aspectRatio || null },
+        model: { id: settings.modelId, imageSize: settings.imageSize, aspectRatio: prep.aspectRatio },
         imageCount: prep.images.length,
         finalPrompt: prep.prompt,
         markerPath: prep.markerPath,
@@ -585,6 +631,8 @@ function friendlyError(e: unknown): string {
         return '请求被安全策略拦截';
       case 'MOMO_NO_IMAGE':
         return '模型未返回图像';
+      case 'UPSCALE_FAILED':
+        return `超分回填失败：${e.message}`;
       default:
         return e.message;
     }
@@ -592,10 +640,41 @@ function friendlyError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** 原图宽高（懒回填缓存到 jobs 表，§4.6.8 断言基准） */
+async function ensureOriginalSize(job: JobRow, origAbs: string): Promise<{ width: number; height: number }> {
+  if (job.orig_width && job.orig_height) return { width: job.orig_width, height: job.orig_height };
+  const meta = await sharp(origAbs).metadata();
+  const width = meta.width ?? 0;
+  const height = meta.height ?? 0;
+  if (width && height) {
+    getDb().prepare('UPDATE jobs SET orig_width=?, orig_height=? WHERE id=?').run(width, height, job.id);
+  }
+  return { width, height };
+}
+
+const opacityCache = new Map<string, Promise<boolean>>();
+
+/** 图片是否完全不透明（alpha 通道存在但全部为 255 时允许转 JPEG，避免白白占用体积预算） */
+function isFullyOpaque(fileAbs: string): Promise<boolean> {
+  let p = opacityCache.get(fileAbs);
+  if (!p) {
+    p = sharp(fileAbs)
+      .stats()
+      .then((st) => {
+        const a = st.channels[3];
+        return !!a && a.min === 255;
+      })
+      .catch(() => false);
+    opacityCache.set(fileAbs, p);
+  }
+  return p;
+}
+
 async function imagePartFromFile(
   fileAbs: string,
   maxDim: number,
-  forcePng = false
+  forcePng = false,
+  preferJpeg = false
 ): Promise<ImagePart & { width?: number; height?: number; bytes: number }> {
   const meta = await sharp(fileAbs).metadata();
   const W = meta.width ?? 0;
@@ -610,17 +689,51 @@ async function imagePartFromFile(
     h = Math.max(1, Math.round(H * scale));
     img = img.resize(w, h);
   }
-  const usePng = forcePng || meta.format === 'png' || meta.hasAlpha === true;
+  let usePng = forcePng || (!preferJpeg && (meta.format === 'png' || meta.hasAlpha === true));
+  if (!usePng && meta.hasAlpha === true) {
+    usePng = !(await isFullyOpaque(fileAbs));
+  }
   const buf = usePng ? await img.png().toBuffer() : await img.jpeg({ quality: 90 }).toBuffer();
   return { mime: usePng ? 'image/png' : 'image/jpeg', base64: buf.toString('base64'), width: w, height: h, bytes: buf.length };
 }
 
-async function shrinkParts(files: string[], maxDim: number, forcePngFirst: boolean): Promise<ImagePart[]> {
-  const out: ImagePart[] = [];
-  for (let i = 0; i < files.length; i++) {
-    out.push(await imagePartFromFile(files[i], maxDim, forcePngFirst && i === 0));
+type EncodedPart = ImagePart & { width?: number; height?: number; bytes: number };
+
+/** 发送体积阶梯适配（§7.1 20MB 上限）：从目标长边向下逐档尝试，标记图优先 PNG、超限再 JPEG，尽量保留分辨率 */
+async function fitSendParts(
+  sources: { fileAbs: string; kind: 'marker' | 'material' }[],
+  maxDim: number
+): Promise<{ parts: EncodedPart[]; chosenMaxDim: number; markerMime: string }> {
+  const metas = await Promise.all(sources.map((s) => sharp(s.fileAbs).metadata().catch(() => null)));
+  const longOf = (i: number) => Math.max(metas[i]?.width ?? 0, metas[i]?.height ?? 0);
+  const tiers = [...new Set([maxDim, 5120, 4608, 4096, 3584, 3072, 2560, 2048, 1536].filter((d) => d <= maxDim && d >= 512))].sort((a, b) => b - a);
+  if (!tiers.length) tiers.push(maxDim);
+  const cache = new Map<string, Promise<EncodedPart>>();
+  const encode = (i: number, tier: number, forcePng: boolean, preferJpeg: boolean): Promise<EncodedPart> => {
+    const effective = longOf(i) > 0 ? Math.min(tier, longOf(i)) : tier;
+    const key = `${i}|${effective}|${forcePng ? 'p' : preferJpeg ? 'j' : 'a'}`;
+    let p = cache.get(key);
+    if (!p) {
+      p = imagePartFromFile(sources[i].fileAbs, effective, forcePng, preferJpeg);
+      cache.set(key, p);
+    }
+    return p;
+  };
+  let last: { parts: EncodedPart[]; tier: number } | null = null;
+  for (const tier of tiers) {
+    for (const markerJpeg of [false, true]) {
+      const parts = await Promise.all(
+        sources.map((s, i) => encode(i, tier, s.kind === 'marker' && !markerJpeg, s.kind === 'material' || markerJpeg))
+      );
+      last = { parts, tier };
+      const total = parts.reduce((sum, p) => sum + p.base64.length, 0);
+      if (total <= TOTAL_SIZE_LIMIT) {
+        return { parts, chosenMaxDim: tier, markerMime: parts[0]?.mime ?? 'image/png' };
+      }
+    }
   }
-  return out;
+  logLine('warn', `发送体积仍超过 ${Math.round(TOTAL_SIZE_LIMIT / 1048576)}MB 上限，按最小档发送（长边 ${last?.tier ?? maxDim}px）`);
+  return { parts: last!.parts, chosenMaxDim: last!.tier, markerMime: last!.parts[0]?.mime ?? 'image/png' };
 }
 
 function libraryFileAbs(libraryItemId: string | null): string | null {

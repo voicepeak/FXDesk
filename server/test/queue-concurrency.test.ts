@@ -4,13 +4,14 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
-const held = vi.hoisted(() => ({ pending: new Map<string, () => void>(), active: 0, peak: 0, calls: [] as string[] }));
+const held = vi.hoisted(() => ({ pending: new Map<string, () => void>(), active: 0, peak: 0, calls: [] as string[], ratios: new Map<string, string | undefined>() }));
 vi.mock('../src/notify', () => ({ notifyComplete: vi.fn(), notifyFail: vi.fn() }));
 vi.mock('../src/qc', () => ({ runIdentityCheck: async () => ({ identity: { status: 'skipped', sim: null }, shouldRepair: false }) }));
 vi.mock('../src/momo', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/momo')>(),
   generateWithFallback: vi.fn(async (opts: import('../src/momo').GenerateOptions) => {
     const jobId = opts.context!.jobId;
+    held.ratios.set(jobId, opts.aspectRatio);
     held.calls.push(jobId); held.active++; held.peak = Math.max(held.peak, held.active);
     await new Promise<void>((resolve) => held.pending.set(jobId, resolve));
     held.pending.delete(jobId); held.active--;
@@ -36,7 +37,7 @@ describe('队列并发和取消（生成服务使用内存替身）', () => {
       const relative = `jobs/${id}/input/original.png`;
       const file = path.join(tmp, relative);
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      await sharp({ create: { width: 32, height: 32, channels: 3, background: '#334455' } }).png().toFile(file);
+      await sharp({ create: { width: i === 1 ? 30 : 40, height: i === 2 ? 30 : 40, channels: 3, background: '#334455' } }).png().toFile(file);
       db.prepare("INSERT INTO jobs (id,name,status,original_path,created_at,updated_at) VALUES (?,?,'queued',?,?,?)").run(id, id, relative, Date.now(), Date.now());
       db.prepare("INSERT INTO runs (id,job_id,seq,status,created_at) VALUES (?,?,1,'queued',?)").run(`run-${i}`, id, Date.now());
       manager.enqueue(id, `run-${i}`);
@@ -50,6 +51,12 @@ describe('队列并发和取消（生成服务使用内存替身）', () => {
     expect(held.peak).toBe(4);
     expect(held.calls).toHaveLength(4);
     expect(held.calls).not.toContain('job-5');
+    expect(held.ratios.get('job-1')).toBe('3:4');
+    expect(held.ratios.get('job-2')).toBe('4:3');
+    expect(held.ratios.get('job-3')).toBe('1:1');
+    const savedRequest = JSON.parse(fs.readFileSync(path.join(tmp, 'jobs/job-1/02_runs/run_0001/request.json'), 'utf8'));
+    expect(savedRequest.model.aspectRatio).toBe('3:4');
+    expect(savedRequest.finalPrompt).toContain('不得添加黑边');
     expect(db.prepare('SELECT status FROM runs WHERE id=?').get('run-5')).toEqual({ status: 'canceled' });
     expect((db.prepare("SELECT COUNT(*) AS count FROM runs WHERE status='done'").get() as { count: number }).count).toBe(4);
   });

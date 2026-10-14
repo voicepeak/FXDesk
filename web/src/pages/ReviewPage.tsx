@@ -283,6 +283,14 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
             ⚕ 面部重修{qc.faceRepair.status === 'done' ? '已完成' : qc.faceRepair.status === 'failed' ? '失败（转人工）' : '进行中'}
           </span>
         )}
+        {currentRun?.upscale?.degraded && (
+          <span className={cls('qc-item', 'qc-warn')} title={currentRun.upscale.degradeReason ?? ''}>
+            ⟳ 超分已降级为 Lanczos（细节未增强）
+          </span>
+        )}
+        {currentRun?.upscale?.cropped && (
+          <span className={cls('qc-item', 'qc-warn')}>▣ 宽高比偏差已裁剪</span>
+        )}
         <div className="spacer" />
         <button className="btn btn-sm" onClick={() => setWipe((w) => !w)}>
           {wipe ? '退出滑块对比' : '滑块对比'}
@@ -474,6 +482,18 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
                 <span>费用</span>
                 <span className="kv-val">{fmtCost(currentRun.cost)}</span>
               </div>
+              {currentRun.upscale && (
+                <div className="kv-row">
+                  <span>超分回填</span>
+                  <span className="kv-val">
+                    {currentRun.upscale.engine === 'realesrgan'
+                      ? `Real-ESRGAN${currentRun.upscale.model ? `（${currentRun.upscale.model.replace('realesrgan-', '')}）` : ''}`
+                      : 'Lanczos'}
+                    {currentRun.upscale.degraded ? '（已降级）' : ''} · {currentRun.upscale.from} → {currentRun.upscale.to}
+                    {currentRun.upscale.cropped ? ' · 已裁剪' : ''}
+                  </span>
+                </div>
+              )}
               {currentRun.error && (
                 <div className="kv-row">
                   <span>错误</span>
@@ -484,6 +504,13 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
                 <div className="form-hint">
                   <a href={currentRun.markerUrl} target="_blank" rel="noreferrer">
                     查看标记图（发给模型的输入）
+                  </a>
+                </div>
+              )}
+              {currentRun.rawUrl && currentRun.rawUrl !== currentRun.resultUrl && (
+                <div className="form-hint">
+                  <a href={currentRun.rawUrl} target="_blank" rel="noreferrer">
+                    查看模型直出（未回填）
                   </a>
                 </div>
               )}

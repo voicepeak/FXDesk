@@ -35,6 +35,9 @@ run('npm', ['run', 'init-config', '-w', 'server'], true);
 log('下载质检模型（可选，失败不阻断，QC 降级为人工）…');
 run('npm', ['run', 'setup-models', '-w', 'server'], false);
 
+log('下载超分引擎 Real-ESRGAN（可选，失败不阻断，交付自动降级 Lanczos）…');
+run('npm', ['run', 'setup-upscaler'], false);
+
 log('生成演示素材到 workspace/demo（可选）…');
 run('npm', ['run', 'seed', '-w', 'server'], false);
 

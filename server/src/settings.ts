@@ -24,7 +24,7 @@ export interface AppSettings {
   baseUrl: string;
   modelId: string;
   imageSize: '1K' | '2K' | '4K';
-  aspectRatio: string; // '' = 不传
+  aspectRatio: string; // '' = 自动使用主图最接近的支持比例
   pricePerImage: number;
   queueConcurrency: number;
   runTimeoutSec: number;
@@ -41,6 +41,8 @@ export interface AppSettings {
   tplRepair: string;
   tplPlate: string;
   sendMaxDimension: number;
+  upscaleEngine: 'realesrgan' | 'lanczos';
+  upscaleTimeoutSec: number;
   workspacePath: string;
   mockApi: boolean;
   materialSoftLimit: number;
@@ -63,6 +65,8 @@ export function defaultSettings(): AppSettings {
     qcAutoFaceRepair: true,
     ...DEFAULT_TEMPLATES,
     sendMaxDimension: 4096,
+    upscaleEngine: 'realesrgan',
+    upscaleTimeoutSec: 900,
     workspacePath: './workspace',
     mockApi: false,
     materialSoftLimit: 4,
@@ -77,13 +81,22 @@ const REQUIRED_PLACEHOLDERS: Partial<Record<keyof AppSettings, string[]>> = {
 };
 
 let cached: AppSettings | null = null;
+let cachedStamp = 0;
 
 function configPath(): string {
   return ws('config.json');
 }
 
+function configStamp(): number {
+  try {
+    return fs.statSync(configPath()).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
 export function loadSettings(force = false): AppSettings {
-  if (cached && !force) return cached;
+  if (cached && !force && configStamp() === cachedStamp) return cached;
   ensureWorkspaceDirs();
   let s = defaultSettings();
   try {
@@ -93,6 +106,7 @@ export function loadSettings(force = false): AppSettings {
     // first run
   }
   cached = s;
+  cachedStamp = configStamp();
   return s;
 }
 
@@ -100,6 +114,7 @@ export function saveSettings(next: AppSettings): void {
   cached = next;
   ensureWorkspaceDirs();
   fs.writeFileSync(configPath(), JSON.stringify(next, null, 2), 'utf8');
+  cachedStamp = configStamp();
   try {
     const db = getDb();
     const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
@@ -168,6 +183,13 @@ export function updateSettings(patch: Partial<AppSettings>): SettingsUpdateResul
   }
   if (patch.sendMaxDimension !== undefined) {
     next.sendMaxDimension = Math.max(512, Math.round(Number(patch.sendMaxDimension) || 4096));
+  }
+  if (patch.upscaleEngine !== undefined) {
+    next.upscaleEngine = patch.upscaleEngine === 'lanczos' ? 'lanczos' : 'realesrgan';
+  }
+  if (patch.upscaleTimeoutSec !== undefined) {
+    const seconds = Number(patch.upscaleTimeoutSec);
+    next.upscaleTimeoutSec = Number.isFinite(seconds) ? Math.min(3600, Math.max(60, Math.round(seconds))) : 900;
   }
   if (patch.runTimeoutSec !== undefined) {
     const seconds = Number(patch.runTimeoutSec);
