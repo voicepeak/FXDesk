@@ -324,20 +324,31 @@ export function registerJobsRoutes(app: FastifyInstance): void {
     const warning = count >= settings.materialSoftLimit ? `v1 建议不超过 ${settings.materialSoftLimit} 张参考图` : null;
 
     let materialId = randomUUID();
-    const order = ((db.prepare('SELECT MAX(order_index) AS m FROM job_materials WHERE job_id=?').get(id) as { m: number | null }).m ?? 0) + 1;
+    let order = ((db.prepare('SELECT MAX(order_index) AS m FROM job_materials WHERE job_id=?').get(id) as { m: number | null }).m ?? 0) + 1;
 
     if (req.isMultipart()) {
       const { files, fields } = await readMultipart(req);
       const file = files.find((f) => f.fieldname === 'file');
       if (!file) throw apiError(400, 'NO_FILE', '缺少素材文件（字段名 file）');
       const ext = path.extname(file.filename).toLowerCase() || '.png';
-      if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) throw apiError(400, 'MATERIAL_TYPE', '素材仅支持 jpg / png / webp');
+      if (!['.jpg', '.jpeg', '.png', '.webp', '.gif', '.tif', '.tiff', '.avif'].includes(ext)) throw apiError(400, 'MATERIAL_TYPE', '参考图支持 JPG、PNG、WebP、GIF、TIFF、AVIF');
+      if (file.truncated || file.buf.length > 50 * 1024 * 1024) throw apiError(400, 'MATERIAL_TOO_LARGE', '参考图不能超过 50 MB');
+      let normalized: Buffer;
+      try {
+        normalized = await sharp(file.buf).rotate()
+          .resize({ width: 6144, height: 6144, fit: 'inside', withoutEnlargement: true })
+          .png().toBuffer();
+      } catch {
+        throw apiError(400, 'MATERIAL_INVALID', '无法读取参考图，请确认文件是有效图片后重试');
+      }
+      // Allocate after decoding so concurrent uploads receive distinct reference numbers.
+      order = ((db.prepare('SELECT MAX(order_index) AS m FROM job_materials WHERE job_id=?').get(id) as { m: number | null }).m ?? 0) + 1;
       const safeBase = path.basename(file.filename, ext).replace(/[^\w\u4e00-\u9fa5.-]+/g, '_').slice(0, 60) || 'material';
-      const filename = `${String(order).padStart(2, '0')}_${safeBase}${ext}`;
+      const filename = `${String(order).padStart(2, '0')}_${safeBase}_${materialId}.png`;
       const dir = ws('jobs', id, 'materials', 'client');
       fs.mkdirSync(dir, { recursive: true });
       const target = path.join(dir, filename);
-      fs.writeFileSync(target, file.buf);
+      fs.writeFileSync(target, normalized);
       const displayName = (fields.displayName ?? '').trim() || path.basename(file.filename, ext);
       db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index) VALUES (?, ?, ?, NULL, ?, ?, ?)').run(
         materialId,

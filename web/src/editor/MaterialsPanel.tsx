@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
 import LibraryPicker from '../components/LibraryPicker';
@@ -20,36 +20,64 @@ export default function MaterialsPanel(props: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadLock = useRef(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState('');
+  const [fileOver, setFileOver] = useState(false);
 
-  const uploadFile = async (file: File) => {
+  const uploadFiles = useCallback(async (files: File[]) => {
+    if (!files.length || uploadLock.current) return;
+    uploadLock.current = true;
+    setUploading(true);
+    let succeeded = 0;
     try {
-      const r = await api.addMaterialFile(props.jobId, file);
-      if (r.warning) toast(r.warning, 'info');
-      props.onChanged();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), 'error');
+      for (const [index, file] of files.entries()) {
+        setUploadProgress(`上传中 ${index + 1}/${files.length} · ${file.name}`);
+        if (!/\.(jpe?g|png|webp|gif|tiff?|avif)$/i.test(file.name)) {
+          toast(`${file.name}：支持 JPG、PNG、WebP、GIF、TIFF、AVIF 图片`, 'error');
+          continue;
+        }
+        if (file.size > 50 * 1024 * 1024) {
+          toast(`${file.name}：参考图不能超过 50 MB`, 'error');
+          continue;
+        }
+        try {
+          const r = await api.addMaterialFile(props.jobId, file);
+          succeeded++;
+          if (r.warning) toast(r.warning, 'info');
+        } catch (e) {
+          toast(`${file.name}：${e instanceof Error ? e.message : String(e)}`, 'error');
+        }
+      }
+      if (succeeded) {
+        props.onChanged();
+        toast(`已上传 ${succeeded} 张参考图`, 'success');
+      }
+    } finally {
+      uploadLock.current = false;
+      setUploading(false);
+      setUploadProgress('');
     }
-  };
+  }, [props.jobId, props.onChanged, toast]);
 
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
       if (!items) return;
+      const files: File[] = [];
       for (const item of items) {
         if (item.type.startsWith('image/')) {
           const f = item.getAsFile();
           if (f) {
-            e.preventDefault();
-            void uploadFile(f);
+            files.push(f);
           }
-          return;
         }
       }
+      if (files.length) { e.preventDefault(); void uploadFiles(files); }
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.jobId]);
+  }, [uploadFiles]);
 
   const rename = async (mid: string) => {
     const name = editValue.trim();
@@ -103,13 +131,21 @@ export default function MaterialsPanel(props: Props) {
         <span className="chip chip-mini">{props.materials.length}</span>
         <div className="spacer" />
       </div>
-      <div className="panel-scroll">
-        <div className="add-drop" onClick={() => fileRef.current?.click()}>
-          点击上传客户素材 / 粘贴图片 / 从素材库选择
-        </div>
-        <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void uploadFile(f);
+      <div className="panel-scroll" onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = uploading ? 'none' : 'copy'; setFileOver(true); }
+      }} onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFileOver(false);
+      }} onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault(); setFileOver(false);
+        void uploadFiles(Array.from(e.dataTransfer.files));
+      }}>
+        <button type="button" className={cls('add-drop reference-upload', fileOver && 'drag-over')} disabled={uploading} aria-label="上传参考图" onClick={() => fileRef.current?.click()}>
+          {uploading ? uploadProgress : '＋ 点击或拖拽上传参考图'}
+        </button>
+        <div className="reference-upload-help" role="status">支持多选 / 粘贴 · 每张最多 50 MB<br />JPG、PNG、WebP、GIF、TIFF、AVIF</div>
+        <input ref={fileRef} type="file" accept=".jpg,.jpeg,.png,.webp,.gif,.tif,.tiff,.avif" multiple disabled={uploading} aria-label="参考图文件" style={{ display: 'none' }} onChange={(e) => {
+          void uploadFiles(Array.from(e.target.files ?? []));
           e.target.value = '';
         }} />
         <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
@@ -126,11 +162,16 @@ export default function MaterialsPanel(props: Props) {
             draggable
             onDragStart={() => setDragId(m.id)}
             onDragOver={(e) => {
+              if (e.dataTransfer.types.includes('Files')) return;
               e.preventDefault();
               setOverId(m.id);
             }}
             onDragLeave={() => setOverId((v) => (v === m.id ? null : v))}
-            onDrop={() => void dropOn(m)}
+            onDrop={(e) => {
+              if (e.dataTransfer.files.length) return;
+              e.preventDefault(); e.stopPropagation(); void dropOn(m);
+            }}
+            onDragEnd={() => { setDragId(null); setOverId(null); }}
           >
             {m.fileUrl ? <img className="material-thumb" src={m.fileUrl} alt="" /> : <div className="material-thumb" />}
             <div className="material-info">
