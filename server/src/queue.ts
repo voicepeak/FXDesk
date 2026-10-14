@@ -29,6 +29,11 @@ interface ActiveInfo {
   stage: string;
   startedAt: number;
   cancelRequested?: boolean;
+  attempt?: number;
+  message?: string;
+  retryAt?: number;
+  timeoutSec?: number;
+  imageSize?: string;
 }
 
 interface RunPrep {
@@ -137,6 +142,11 @@ export class QueueManager {
           elapsed: Date.now() - a.startedAt,
           cost: job?.cost_total ?? 0,
           startedAt: a.startedAt,
+          attempt: a.attempt,
+          message: a.message,
+          retryAt: a.retryAt,
+          timeoutSec: a.timeoutSec,
+          imageSize: a.imageSize,
         };
       }),
       todayCost,
@@ -147,6 +157,9 @@ export class QueueManager {
 
   private async process(jobId: string, runId: string): Promise<void> {
     const db = getDb();
+    // PQueue cannot remove a queued callback; a canceled run must never reach the paid API.
+    const queuedRun = db.prepare('SELECT status FROM runs WHERE id=?').get(runId) as { status: string } | undefined;
+    if (queuedRun?.status !== 'queued') return;
     this.removePending(jobId);
     const ctrl = new AbortController();
     this.aborts.set(runId, ctrl);
@@ -155,8 +168,9 @@ export class QueueManager {
     this.active.set(jobId, info);
     const stage = (s: string) => {
       info.stage = s;
+      if (!['generating', 'retrying'].includes(s)) { info.message = undefined; info.retryAt = undefined; }
       const elapsed = Date.now() - startedAt;
-      emitRunProgress(runId, jobId, s, elapsed);
+      emitRunProgress(runId, jobId, s, elapsed, undefined, { attempt: info.attempt, message: info.message, retryAt: info.retryAt });
       emitJobUpdate(jobId, { stage: s, elapsed });
     };
 
@@ -165,6 +179,8 @@ export class QueueManager {
       const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobRow | undefined;
       if (!run || !job) throw new Error('run/job 不存在');
       const settings = loadSettings();
+      info.timeoutSec = settings.runTimeoutSec;
+      info.imageSize = settings.imageSize;
 
       const isRepair = run.type === 'repair';
       db.prepare("UPDATE runs SET status='generating' WHERE id=?").run(runId);
@@ -182,6 +198,13 @@ export class QueueManager {
         signal: ctrl.signal,
         settings,
         mockReturn: prep.mockReturn,
+        context: { jobId, runId },
+        onProgress: (progress) => {
+          info.attempt = progress.attempt;
+          info.message = progress.message;
+          info.retryAt = progress.retryAt;
+          stage(progress.stage);
+        },
       });
 
       stage('downloading');

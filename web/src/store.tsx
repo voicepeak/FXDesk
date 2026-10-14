@@ -186,12 +186,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
     es.addEventListener('run_progress', (e) => {
       try {
-        const p = JSON.parse((e as MessageEvent).data) as { runId: string; jobId: string; stage: string; elapsedMs: number };
+        const p = JSON.parse((e as MessageEvent).data) as { runId: string; jobId: string; stage: string; elapsedMs: number; attempt?: number; message?: string; retryAt?: number };
         setQueue((q) => {
           if (!q) return q;
           return {
             ...q,
-            active: q.active.map((a) => (a.runId === p.runId ? { ...a, stage: p.stage, elapsed: p.elapsedMs } : a)),
+            active: q.active.map((a) => (a.runId === p.runId ? { ...a, stage: p.stage, elapsed: p.elapsedMs, attempt: p.attempt, message: p.message, retryAt: p.retryAt } : a)),
           };
         });
       } catch {

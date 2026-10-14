@@ -62,16 +62,16 @@ export default function PromptPanel(props: Props) {
         </button>
       </div>
       <div className="panel-scroll">
-        <div className="prompt-block">
-          <div className="prompt-block-head">
-            系统块（锁定区，自动注入）
+        <details className="prompt-block prompt-readonly">
+          <summary className="prompt-block-head">
+            系统约束
             <div className="spacer" />
             <span className="chip chip-mini">只读</span>
-          </div>
+          </summary>
           <div className="prompt-block-body">
             <div className="prompt-locked">{systemBlock?.text ?? ''}</div>
           </div>
-        </div>
+        </details>
 
         {props.regions.map((r) => {
           const cname = colorName(r.color);
@@ -131,8 +131,14 @@ export default function PromptPanel(props: Props) {
           );
         })}
 
+        {props.regions.length > 5 && (
+          <div className="gen-reason" style={{ margin: '0 12px' }}>
+            ⚠ 区域较多可能降低指令准确率，建议拆分两次生成
+          </div>
+        )}
+
         <div className="prompt-block">
-          <div className="prompt-block-head">全局块（背景等）</div>
+          <div className="prompt-block-head">全局指令</div>
           <div className="prompt-block-body">
             <textarea
               className="textarea"
@@ -144,20 +150,20 @@ export default function PromptPanel(props: Props) {
                 props.onGlobalChange(e.target.value);
               }}
             />
-            {globalBlock ? <div className="region-location" style={{ marginTop: 6 }}>拼接预览：{globalBlock.text.slice(0, 60)}…</div> : <div className="region-location" style={{ marginTop: 6 }}>留空则自动省略整段</div>}
+            {!globalBlock && <div className="region-location" style={{ marginTop: 6 }}>留空则省略全局修改</div>}
           </div>
         </div>
 
-        <div className="prompt-block">
-          <div className="prompt-block-head">
-            收尾块（融合与标记移除）
+        <details className="prompt-block prompt-readonly">
+          <summary className="prompt-block-head">
+            融合与标记移除
             <div className="spacer" />
             <span className="chip chip-mini">只读</span>
-          </div>
+          </summary>
           <div className="prompt-block-body">
             <div className="prompt-locked">{endingBlock?.text ?? ''}</div>
           </div>
-        </div>
+        </details>
 
         {showFinal && (
           <div className="prompt-block">
@@ -171,7 +177,7 @@ export default function PromptPanel(props: Props) {
 
       <div className="gen-bar">
         <button className="btn btn-primary gen-btn" disabled={!!genReason || props.genBusy} onClick={props.onGenerate}>
-          {props.genBusy ? '提交中…' : '⚡ 开始生成'}
+          {props.genBusy ? '提交中…' : '开始生成'}
         </button>
         <div className="region-location" style={{ marginTop: 7 }}>
           单张费用 {fmtCost(props.settings?.pricePerImage ?? 0)} · 累计 {fmtCost(props.job.costTotal)}

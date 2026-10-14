@@ -72,6 +72,8 @@ export const api = {
     fetch(`/api/jobs/${jobId}/deliver`, jsonInit('POST', { runId })).then((r) => j<{ finalPath: string; libraryItemId: string; tags: string[] }>(r)),
 
   queue: () => fetch('/api/queue').then((r) => j<QueueSnapshot>(r)),
+  runLocation: (runId: string) => fetch(`/api/runs/${runId}/location`).then((r) => j<{ filePath: string; folderPath: string; fileName: string }>(r)),
+  revealRun: (runId: string) => fetch(`/api/runs/${runId}/reveal`, jsonInit('POST', {})).then((r) => j<{ ok: boolean; filePath: string }>(r)),
   retryRun: (runId: string) => fetch(`/api/runs/${runId}/retry`, jsonInit('POST', {})).then((r) => j<{ runId: string; seq: number }>(r)),
   cancelRun: (runId: string) => fetch(`/api/runs/${runId}/cancel`, jsonInit('POST', {})).then((r) => j<{ ok: boolean }>(r)),
   saveElements: (runId: string, elements: { label: string; checked: boolean }[]) =>

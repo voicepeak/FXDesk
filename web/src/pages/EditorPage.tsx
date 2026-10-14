@@ -4,12 +4,14 @@ import { useStore } from '../store';
 import AnnotationCanvas from '../editor/AnnotationCanvas';
 import MaterialsPanel from '../editor/MaterialsPanel';
 import PromptPanel from '../editor/PromptPanel';
+import GenerationStatus from '../components/GenerationStatus';
+import ResultLocationButton from '../components/ResultLocationButton';
 import { StatusBadge } from './JobsPage';
 import { cls, paletteColor } from '../util';
 import type { Bbox, JobDetail, Region } from '../types';
 
 export default function EditorPage({ jobId }: { jobId: string }) {
-  const { navigate, toast, settings, refreshJobs } = useStore();
+  const { navigate, toast, settings, refreshJobs, jobs } = useStore();
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [regions, setRegions] = useState<Region[]>([]);
   const [preview, setPreview] = useState<JobDetail['preview'] | null>(null);
@@ -181,7 +183,7 @@ export default function EditorPage({ jobId }: { jobId: string }) {
     setGenBusy(true);
     try {
       const r = await api.generate(jobId, {});
-      toast(`已入队（Run ${r.seq}），进度见底部任务栏`, 'success');
+      toast(`已入队（Run ${r.seq}），进度见左侧任务栏`, 'success');
       void refreshJobs();
       await load();
     } catch (e) {
@@ -192,6 +194,9 @@ export default function EditorPage({ jobId }: { jobId: string }) {
   };
 
   if (!detail) return <div className="loading-page">加载中…</div>;
+  const liveJob = jobs.find((j) => j.id === jobId);
+  const liveStatus = liveJob?.status ?? detail.job.status;
+  const latestResultId = liveJob?.lastRun?.status === 'done' ? liveJob.lastRun.id : detail.job.finalRunId;
 
   return (
     <div className="editor">
@@ -213,7 +218,7 @@ export default function EditorPage({ jobId }: { jobId: string }) {
             onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
             title="客单名"
           />
-          <StatusBadge status={detail.job.status} />
+          <StatusBadge status={liveStatus} />
           <span className="muted" style={{ fontSize: 11.5 }}>
             {saved ? '已保存' : '保存中…'}
           </span>
@@ -230,12 +235,16 @@ export default function EditorPage({ jobId }: { jobId: string }) {
           </button>
           <div className="spacer" />
           <span className="zoom-label">{Math.round(zoom * 100)}%</span>
-          {(detail.job.status === 'review' || detail.job.status === 'delivered') && (
+          {(liveStatus === 'review' || liveStatus === 'delivered') && (
+            <ResultLocationButton runId={latestResultId} className="btn btn-sm" />
+          )}
+          {(liveStatus === 'review' || liveStatus === 'delivered') && (
             <button className="btn btn-sm btn-primary" onClick={() => navigate({ name: 'review', jobId })}>
               进入审核 →
             </button>
           )}
         </div>
+        <GenerationStatus jobId={jobId} />
         <AnnotationCanvas
           imageUrl={detail.job.originalUrl}
           regions={regions}
@@ -252,7 +261,7 @@ export default function EditorPage({ jobId }: { jobId: string }) {
 
       <div className="editor-col editor-col-right">
         <PromptPanel
-          job={detail.job}
+          job={{ ...detail.job, status: liveStatus }}
           materials={detail.materials}
           regions={regions}
           preview={preview}

@@ -11,10 +11,10 @@ export default function Modal(props: { title: string; onClose: () => void; child
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div className="modal" style={{ width: props.width ?? 520 }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={props.title} style={{ width: props.width ?? 520 }}>
         <div className="modal-head">
           <div className="modal-title">{props.title}</div>
-          <button className="icon-btn" onClick={props.onClose}>
+          <button className="icon-btn" aria-label="关闭弹窗" onClick={props.onClose}>
             ✕
           </button>
         </div>

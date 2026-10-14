@@ -165,7 +165,7 @@ export interface Settings {
 export interface QueueSnapshot {
   concurrency: number;
   pending: { jobId: string; runId: string; name: string; thumb: string | null; position: number }[];
-  active: { jobId: string; runId: string; name: string; thumb: string | null; stage: string; elapsed: number; cost: number; startedAt: number }[];
+  active: { jobId: string; runId: string; name: string; thumb: string | null; stage: string; elapsed: number; cost: number; startedAt: number; attempt?: number; message?: string; retryAt?: number; timeoutSec?: number; imageSize?: string }[];
   todayCost: number;
   monthlyCost: number;
   mock: boolean;

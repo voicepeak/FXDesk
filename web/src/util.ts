@@ -106,6 +106,7 @@ export const STAGE_LABELS: Record<string, string> = {
   queued: '排队中',
   uploading: '上传中',
   generating: '生成中',
+  retrying: '限流重试中',
   downloading: '下载中',
   qc: '质检中',
   review: '待审核',
@@ -115,11 +116,25 @@ export const STAGE_LABELS: Record<string, string> = {
   delivered: '已交付',
 };
 
-export function statusGroup(status: JobStatus): 'ongoing' | 'review' | 'delivered' | 'failed' {
+export const JOB_GROUPS = [
+  { key: 'ongoing', title: '进行中' },
+  { key: 'review', title: '待审核' },
+  { key: 'delivered', title: '已完成' },
+] as const;
+
+export function statusGroup(status: JobStatus): typeof JOB_GROUPS[number]['key'] {
   if (status === 'review') return 'review';
   if (status === 'delivered') return 'delivered';
-  if (status === 'failed' || status === 'canceled') return 'failed';
   return 'ongoing';
+}
+
+export function taskStatusLabel(status: JobStatus): string {
+  if (status === 'failed' || status === 'canceled') return STATUS_LABELS[status];
+  return JOB_GROUPS.find((group) => group.key === statusGroup(status))!.title;
+}
+
+export function taskStatusClass(status: JobStatus): string {
+  return `st-${status === 'failed' || status === 'canceled' ? status : statusGroup(status)}`;
 }
 
 export function cls(...xs: (string | false | null | undefined)[]): string {

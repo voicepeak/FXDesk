@@ -6,8 +6,23 @@ import { emitJobUpdate } from '../sse';
 import { logEvent } from '../logger';
 import { apiError } from './jobs';
 import type { JobRow, RunRow } from '../types';
+import { getResultLocation, revealResult } from '../resultLocation';
 
 export function registerRunsRoutes(app: FastifyInstance): void {
+  app.get('/api/runs/:id/location', async (req) => {
+    return getResultLocation((req.params as { id: string }).id);
+  });
+
+  app.post('/api/runs/:id/reveal', async (req) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      let local = false;
+      try { local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(origin).hostname); } catch { /* reject */ }
+      if (!local) throw apiError(403, 'FORBIDDEN', '仅允许本地页面打开文件位置');
+    }
+    return revealResult((req.params as { id: string }).id);
+  });
+
   app.get('/api/queue', async () => {
     return queueManager.snapshot();
   });

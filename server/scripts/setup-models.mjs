@@ -134,6 +134,7 @@ async function tryZip() {
   } catch (e) {
     console.warn(`[models] zip 回退失败：${e.message}`);
     fs.rmSync(zipPath, { force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
     return false;
   }
 }

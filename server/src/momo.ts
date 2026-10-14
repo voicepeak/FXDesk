@@ -1,5 +1,7 @@
 import { decodeKey, isMockMode, loadSettings, type AppSettings } from './settings';
 import { logLine } from './logger';
+import { request } from 'undici';
+import { randomUUID } from 'node:crypto';
 
 export class MomoError extends Error {
   code: string;
@@ -33,6 +35,15 @@ export interface GenerateOptions {
   settings?: AppSettings;
   /** mock 模式下返回的图片（模拟模型返回），由管线提供 */
   mockReturn?: ImagePart;
+  context?: { jobId: string; runId: string };
+  onProgress?: (progress: GenerationProgress) => void;
+}
+
+export interface GenerationProgress {
+  stage: 'generating' | 'retrying';
+  attempt: number;
+  message: string;
+  retryAt?: number;
 }
 
 function trimSlash(u: string): string {
@@ -45,21 +56,23 @@ function authHeader(s: AppSettings): string {
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(t);
-        reject(new MomoError('CANCELED', '已取消'));
-      },
-      { once: true }
-    );
+    if (signal?.aborted) { reject(signal.reason ?? new MomoError('CANCELED', '已取消')); return; }
+    const cleanup = () => signal?.removeEventListener('abort', onAbort);
+    const t = setTimeout(() => { cleanup(); resolve(); }, ms);
+    const onAbort = () => { clearTimeout(t); cleanup(); reject(signal?.reason ?? new MomoError('CANCELED', '已取消')); };
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+/** 模拟模式下模拟真实生成耗时（默认 2.2s，便于观察 排队→生成→质检 全流程；FXDESK_MOCK_LATENCY_MS=0 可关闭） */
+async function mockLatency(signal?: AbortSignal): Promise<void> {
+  const ms = Number(process.env.FXDESK_MOCK_LATENCY_MS ?? 2200);
+  if (Number.isFinite(ms) && ms > 0) await sleep(ms, signal);
 }
 
 function combineSignals(timeoutMs: number, external?: AbortSignal): { signal: AbortSignal; dispose: () => void } {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(new MomoError('MOMO_TIMEOUT', `请求超时（${Math.round(timeoutMs / 1000)}秒）`, { retriable: true })), timeoutMs);
+  const t = setTimeout(() => ctrl.abort(new MomoError('MOMO_TIMEOUT', `等待超过 ${Math.round(timeoutMs / 1000)} 秒；远端可能已生成或扣费，请先核对远端记录后再重试`)), timeoutMs);
   const onAbort = () => ctrl.abort(external?.reason instanceof Error ? external.reason : new MomoError('CANCELED', '已取消'));
   if (external) {
     if (external.aborted) onAbort();
@@ -76,12 +89,13 @@ function combineSignals(timeoutMs: number, external?: AbortSignal): { signal: Ab
 
 const RETRY_DELAYS = [2000, 8000, 20000];
 
-/** 主接口：nano-banana 系 generateContent（§7.1）。含 429/5xx/网络错误的重试（2s/8s/20s）。 */
+/** 同步生成：整个调用共享等待预算；仅明确拒绝的 429 可自动重试。 */
 export async function generateContent(opts: GenerateOptions): Promise<GenerateResult> {
   const s = opts.settings ?? loadSettings();
 
   if (isMockMode(s)) {
     if (!opts.mockReturn) throw new MomoError('MOCK_NO_SOURCE', '模拟模式缺少模拟返回图');
+    await mockLatency(opts.signal);
     return { mime: opts.mockReturn.mime, base64: opts.mockReturn.base64, mocked: true, raw: { mock: true } };
   }
 
@@ -104,40 +118,64 @@ export async function generateContent(opts: GenerateOptions): Promise<GenerateRe
     },
   };
 
-  let lastErr: MomoError | null = null;
-  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
-    if (attempt > 0) {
-      const delay = RETRY_DELAYS[attempt - 1];
-      logLine('warn', `墨墨请求失败（${lastErr?.code}），${delay / 1000}s 后重试（第 ${attempt} 次重试）`);
-      await sleep(delay, opts.signal);
-    }
-    const combined = combineSignals(s.runTimeoutSec * 1000, opts.signal);
-    try {
-      const resp = await fetch(url, {
+  const timeoutMs = s.runTimeoutSec * 1000;
+  const deadline = Date.now() + timeoutMs;
+  const combined = combineSignals(timeoutMs, opts.signal);
+  const requestBody = JSON.stringify(body);
+  let requestId: string | undefined;
+  let localRequestId: string | undefined;
+  let attempt = 0;
+  try {
+    for (; attempt <= RETRY_DELAYS.length; attempt++) {
+      if (combined.signal.aborted) throw combined.signal.reason;
+      localRequestId = randomUUID();
+      const attemptStartedAt = Date.now();
+      requestId = undefined;
+      opts.onProgress?.({ stage: 'generating', attempt: attempt + 1, message: attempt ? `远端限流后重新提交（第 ${attempt + 1} 次）` : '等待远端生成结果' });
+      logLine('info', '墨墨生成请求开始', { ...opts.context, localRequestId, attempt: attempt + 1, model: s.modelId, imageSize: s.imageSize, imageCount: opts.images.length, requestBytes: Buffer.byteLength(requestBody), timeoutSec: s.runTimeoutSec });
+      // request allows explicit read/header timeouts; built-in fetch has a separate 300s header limit.
+      const resp = await request(url, {
         method: 'POST',
         headers: { Authorization: authHeader(s), 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: requestBody,
         signal: combined.signal,
+        headersTimeout: Math.max(1, deadline - Date.now()),
+        bodyTimeout: Math.max(1, deadline - Date.now()),
       });
-
-      if (resp.status === 401 || resp.status === 403) {
-        throw new MomoError('MOMO_API_KEY_INVALID', 'API Key 无效或过期', { status: resp.status });
+      const remoteId = resp.headers['x-request-id'] ?? resp.headers['request-id'];
+      requestId = Array.isArray(remoteId) ? remoteId[0] : remoteId;
+      logLine('info', '墨墨生成响应头', { ...opts.context, localRequestId, requestId, attempt: attempt + 1, status: resp.statusCode, elapsedMs: Date.now() - attemptStartedAt });
+      if (resp.statusCode === 429) {
+        await resp.body.dump();
+        if (attempt === RETRY_DELAYS.length) throw new MomoError('MOMO_RATE_LIMITED', '远端持续限流，请降低并行生成数后再试', { status: 429 });
+        const retryHeader = String(resp.headers['retry-after'] ?? '');
+        const retryMs = /^\d+(\.\d+)?$/.test(retryHeader) ? Number(retryHeader) * 1000 : Date.parse(retryHeader) - Date.now();
+        const delay = Math.max(RETRY_DELAYS[attempt], Number.isFinite(retryMs) ? Math.max(0, retryMs) : 0);
+        if (delay >= deadline - Date.now()) throw new MomoError('MOMO_RATE_LIMITED', '远端限流等待超过本次时间预算，请稍后重试或降低并行生成数', { status: 429 });
+        const message = `远端限流，${Math.ceil(delay / 1000)} 秒后重试`;
+        opts.onProgress?.({ stage: 'retrying', attempt: attempt + 1, message, retryAt: Date.now() + delay });
+        logLine('warn', message, { ...opts.context, localRequestId, requestId, attempt: attempt + 1 });
+        await sleep(delay, combined.signal);
+        continue;
       }
-      if (resp.status === 429) {
-        throw new MomoError('MOMO_RATE_LIMITED', '请求频率受限（429）', { status: 429, retriable: true });
+      if (resp.statusCode === 401 || resp.statusCode === 403) {
+        await resp.body.dump();
+        throw new MomoError('MOMO_API_KEY_INVALID', 'API Key 无效或过期', { status: resp.statusCode });
       }
-      if (resp.status >= 500) {
-        throw new MomoError('MOMO_HTTP_5XX', `服务端错误（HTTP ${resp.status}）`, { status: resp.status, retriable: true });
+      if (resp.statusCode >= 500) {
+        await resp.body.dump();
+        throw new MomoError('MOMO_HTTP_5XX', `远端服务异常（HTTP ${resp.statusCode}）；远端可能已生成或扣费，请先核对远端记录后再重试`, { status: resp.statusCode });
       }
-      if (resp.status === 404) {
+      if (resp.statusCode === 404) {
+        await resp.body.dump();
         throw new MomoError('MOMO_UNSUPPORTED', `接口不支持（HTTP 404）: ${url}`, { status: 404 });
       }
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => '');
-        throw new MomoError('MOMO_HTTP_ERROR', `HTTP ${resp.status}: ${text.slice(0, 300)}`, { status: resp.status });
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        await resp.body.dump();
+        throw new MomoError('MOMO_HTTP_ERROR', `远端返回 HTTP ${resp.statusCode}`, { status: resp.statusCode });
       }
 
-      const json = (await resp.json()) as {
+      const json = (await resp.body.json()) as {
         candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string } }[] }; finishReason?: string }[];
         promptFeedback?: { blockReason?: string };
         error?: { message?: string };
@@ -154,29 +192,30 @@ export async function generateContent(opts: GenerateOptions): Promise<GenerateRe
         }
         throw new MomoError('MOMO_NO_IMAGE', '模型未返回图像');
       }
+      logLine('info', '墨墨生成结果接收完成', { ...opts.context, localRequestId, requestId, attempt: attempt + 1, elapsedMs: Date.now() - attemptStartedAt });
       return { mime: part.inlineData.mimeType || 'image/png', base64: part.inlineData.data, raw: json };
-    } catch (e) {
-      const err = toMomoError(e);
-      if (err.code === 'CANCELED') throw err;
-      if (!err.retriable) throw err;
-      lastErr = err;
-    } finally {
-      combined.dispose();
     }
+    throw new MomoError('MOMO_RATE_LIMITED', '远端持续限流');
+  } catch (e) {
+    const err = opts.signal?.aborted ? new MomoError('CANCELED', '已停止本地等待；远端任务可能仍在运行，请核对远端记录') : toMomoError(combined.signal.aborted ? combined.signal.reason : e);
+    const cause = e instanceof Error ? (e as Error & { cause?: { code?: string; message?: string }; code?: string }) : undefined;
+    const scrub = (value: string | undefined) => value?.split(decodeKey(s.apiKey)).join('[REDACTED]').slice(0, 300);
+    logLine('error', '墨墨生成请求结束（未收到有效结果）', { ...opts.context, localRequestId, requestId, attempt: attempt + 1, code: err.code, status: err.status, message: scrub(err.message), causeCode: cause?.cause?.code ?? cause?.code, causeMessage: e instanceof SyntaxError ? '响应不是有效 JSON' : scrub(cause?.cause?.message ?? cause?.message) });
+    throw err;
+  } finally {
+    combined.dispose();
   }
-  throw lastErr ?? new MomoError('MOMO_NETWORK', '请求失败');
 }
 
 function toMomoError(e: unknown): MomoError {
   if (e instanceof MomoError) return e;
   if (e instanceof Error) {
-    if (e.name === 'AbortError') return new MomoError('MOMO_TIMEOUT', '请求超时', { retriable: true });
-    if (/fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket/i.test(e.message)) {
-      return new MomoError('MOMO_NETWORK', `网络错误：${e.message}`, { retriable: true });
-    }
-    return new MomoError('MOMO_NETWORK', e.message, { retriable: true });
+    if (e instanceof SyntaxError) return new MomoError('MOMO_RESPONSE_INVALID', '远端响应格式异常；远端可能已生成或扣费，请先核对远端记录后再重试');
+    const code = (e as Error & { code?: string; cause?: { code?: string } }).code ?? (e as Error & { cause?: { code?: string } }).cause?.code ?? '';
+    if (e.name === 'AbortError' || /TIMEOUT|ETIMEDOUT/.test(code)) return new MomoError('MOMO_TIMEOUT', '请求超时；远端可能已生成或扣费，请先核对远端记录后再重试');
+    return new MomoError('MOMO_NETWORK', '生成连接中断，未收到完整结果；远端可能已生成或扣费，请先核对远端记录后再重试');
   }
-  return new MomoError('MOMO_NETWORK', String(e), { retriable: true });
+  return new MomoError('MOMO_NETWORK', '未收到生成结果；远端可能已生成或扣费，请先核对远端记录后再重试');
 }
 
 /** §7.4 备用接口（P1）：OpenAI 兼容 images/edits?async=true + 任务轮询。仅在主接口返回“接口不支持”时尝试。 */
@@ -184,6 +223,7 @@ export async function generateViaOpenAIFallback(opts: GenerateOptions): Promise<
   const s = opts.settings ?? loadSettings();
   if (isMockMode(s)) {
     if (!opts.mockReturn) throw new MomoError('MOCK_NO_SOURCE', '模拟模式缺少模拟返回图');
+    await mockLatency(opts.signal);
     return { mime: opts.mockReturn.mime, base64: opts.mockReturn.base64, mocked: true };
   }
   const base = trimSlash(s.baseUrl);

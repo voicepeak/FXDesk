@@ -6,13 +6,14 @@ const root = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..'
 const log = (m) => console.log(`[setup] ${m}`);
 
 function run(cmd, args, required) {
-  const r = spawnSync(cmd, args, { cwd: root, stdio: 'inherit', shell: true });
+  const line = [cmd, ...args].join(' ');
+  const r = spawnSync(line, { cwd: root, stdio: 'inherit', shell: true });
   if (r.status !== 0) {
     if (required) {
-      console.error(`[setup] 必需步骤失败：${cmd} ${args.join(' ')}`);
+      console.error(`[setup] 必需步骤失败：${line}`);
       process.exit(1);
     }
-    log(`（非阻断：${cmd} ${args.join(' ')} 未成功，可稍后重试）`);
+    log(`（非阻断：${line} 未成功，可稍后重试）`);
   }
 }
 

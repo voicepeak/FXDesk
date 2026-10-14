@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
 import Modal from '../components/Modal';
+import ResultLocationButton from '../components/ResultLocationButton';
+import GenerationStatus from '../components/GenerationStatus';
 import { StatusBadge } from './JobsPage';
 import { cls, fmtCost, fmtDuration, paletteColor } from '../util';
 import type { Bbox, JobDetail, Run } from '../types';
@@ -214,7 +216,7 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
     if (!currentRun) return;
     try {
       await api.cancelRun(currentRun.id);
-      toast('已取消');
+      toast(currentRun.status === 'queued' ? '已取消排队' : '已停止本地等待；远端可能仍在处理，请核对记录');
       void load();
       void refreshJobs();
     } catch (e) {
@@ -301,6 +303,7 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
         </button>
       </div>
 
+      <GenerationStatus jobId={jobId} />
       <div className="review-main">
         {wipe ? (
           <div className="wipe-pane" style={{ gridColumn: '1 / 3' }}>
@@ -392,6 +395,7 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
 
         <div className="review-side">
           <h4>操作</h4>
+          <ResultLocationButton runId={currentRun?.id} disabled={!currentRun?.resultUrl} />
           <button
             className="btn btn-primary"
             disabled={!currentRun || busy || runActive || !currentRun.resultUrl || detail.job.status === 'delivered'}

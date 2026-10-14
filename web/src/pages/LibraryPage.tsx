@@ -114,7 +114,7 @@ export default function LibraryPage() {
             素材库
           </button>
           <button className={cls('tab', tab === 'favorites' && 'active')} onClick={() => setTab('favorites')}>
-            收藏夹 ⭐
+            收藏夹
           </button>
           <button className={cls('tab', tab === 'history' && 'active')} onClick={() => setTab('history')}>
             历史成果
@@ -128,12 +128,12 @@ export default function LibraryPage() {
         />
         {tab === 'library' && !q && (
           <button className={cls('btn btn-sm', pendingOnly && 'btn-primary')} onClick={() => setPendingOnly((v) => !v)}>
-            待整理（净版 candidate）
+            待整理
           </button>
         )}
         <div className="spacer" />
         <button className="btn btn-primary" onClick={() => setImportOpen(true)}>
-          ＋ 入库（手动上传）
+          ＋ 导入素材
         </button>
       </div>
 
@@ -165,7 +165,7 @@ export default function LibraryPage() {
                   <button className="btn btn-sm" onClick={() => setEditItem(it)}>
                     编辑标签
                   </button>
-                  <button className="btn btn-sm btn-danger" onClick={() => void del(it)}>
+                  <button className="btn btn-sm btn-ghost danger-text" onClick={() => void del(it)}>
                     删除
                   </button>
                 </div>
@@ -262,7 +262,7 @@ export default function LibraryPage() {
           <div className="form-row">
             <label className="label">特效描述（仅保留的特效内容）</label>
             <input className="input" value={plateDesc} onChange={(e) => setPlateDesc(e.target.value)} placeholder="如：闪电、魔法阵" autoFocus />
-            <div className="form-hint">将以该 Job 成片为输入，生成「纯黑背景 + 仅保留特效」的净版图（candidate），⭐ 收藏后升为正式素材。</div>
+            <div className="form-hint">从成片中提取特效，生成纯黑背景的净版图。收藏后收入正式素材库。</div>
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
             <button className="btn" onClick={() => setPlateItem(null)}>

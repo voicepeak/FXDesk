@@ -13,9 +13,12 @@
     "build": "npm run build -w web",
     "test": "npm run test -w server",
     "seed": "npm run seed -w server",
-    "setup-models": "npm run setup-models -w server"
+    "setup-models": "npm run setup-models -w server",
+    "acceptance": "node scripts/acceptance.mjs",
+    "ui-acceptance": "node scripts/ui-acceptance.mjs"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "concurrently": "^9.1.0",
+    "playwright": "^1.64.0"
   }
 }

@@ -55,7 +55,7 @@ export function defaultSettings(): AppSettings {
     aspectRatio: '',
     pricePerImage: 0.3,
     queueConcurrency: 2,
-    runTimeoutSec: 300,
+    runTimeoutSec: 600,
     notifySound: true,
     notifyToast: true,
     qcIdentityPass: 0.62,
@@ -168,6 +168,13 @@ export function updateSettings(patch: Partial<AppSettings>): SettingsUpdateResul
   }
   if (patch.sendMaxDimension !== undefined) {
     next.sendMaxDimension = Math.max(512, Math.round(Number(patch.sendMaxDimension) || 4096));
+  }
+  if (patch.runTimeoutSec !== undefined) {
+    const seconds = Number(patch.runTimeoutSec);
+    if (!Number.isFinite(seconds) || seconds < 60 || seconds > 1800) {
+      return { ok: false, error: '生成等待上限需在 60～1800 秒之间' };
+    }
+    next.runTimeoutSec = Math.round(seconds);
   }
 
   saveSettings(next);

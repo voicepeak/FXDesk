@@ -69,8 +69,8 @@ export function emitJobUpdate(jobId: string, extra?: { stage?: string | null; el
   if (payload) bus.broadcast('job_update', payload);
 }
 
-export function emitRunProgress(runId: string, jobId: string, stage: string, elapsedMs: number, pct?: number): void {
-  bus.broadcast('run_progress', { runId, jobId, stage, elapsedMs, pct: pct ?? null });
+export function emitRunProgress(runId: string, jobId: string, stage: string, elapsedMs: number, pct?: number, details?: { attempt?: number; message?: string; retryAt?: number }): void {
+  bus.broadcast('run_progress', { runId, jobId, stage, elapsedMs, pct: pct ?? null, ...details });
 }
 
 export function emitLibUpdate(reason: string, itemId?: string): void {

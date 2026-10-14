@@ -77,13 +77,15 @@ export default function SettingsPage() {
     <div className="settings-page">
       <div className="settings-grid">
         <h2 style={{ marginTop: 0 }}>设置</h2>
+        <p className="settings-description">连接服务与配置生成。高级选项按需展开。</p>
 
         <div className="settings-group">
-          <h3>API（墨墨中转站）</h3>
+          <h3>连接与生成</h3>
           <div className="settings-cols">
             <div className="form-row">
-              <label className="label">API Key（本地存储，obf 混淆，非强加密）</label>
+              <label className="label">API Key</label>
               <input className="input" type="password" value={keyDraft} onChange={(e) => setKeyDraft(e.target.value)} placeholder="sk-…" />
+              <div className="form-hint">密钥保存在本机，经混淆存储，未强加密。</div>
             </div>
             <div className="form-row">
               <label className="label">Base URL</label>
@@ -108,6 +110,7 @@ export default function SettingsPage() {
                 <option value="2K">2K</option>
                 <option value="4K">4K</option>
               </select>
+              <div className="form-hint">可先用 2K 确认效果，再切换 4K 输出成品；实际生成速度取决于远端。</div>
             </div>
             <div className="form-row">
               <label className="label">单张价格（元，仅费用统计）</label>
@@ -136,16 +139,18 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="settings-group">
-          <h3>队列 / 通知 / 质检</h3>
+        <details className="settings-group" open>
+          <summary>队列、通知与质检</summary>
           <div className="settings-cols">
             <div className="form-row">
               <label className="label">并行生成数（1~4）</label>
               <input className="input" type="number" min={1} max={4} value={form.queueConcurrency} onChange={(e) => set('queueConcurrency', Number(e.target.value))} />
+              <div className="form-hint">提高并发可减少多笔客单排队，单笔生成速度取决于远端。频繁限流时降到 2。</div>
             </div>
             <div className="form-row">
-              <label className="label">单 Run 超时（秒）</label>
-              <input className="input" type="number" value={form.runTimeoutSec} onChange={(e) => set('runTimeoutSec', Number(e.target.value))} />
+              <label className="label">生成等待上限（秒）</label>
+              <input className="input" type="number" min={60} max={1800} value={form.runTimeoutSec} onChange={(e) => set('runTimeoutSec', Number(e.target.value))} />
+              <div className="form-hint">4K 建议 600 秒。限流重试共用这一时间预算；连接中断后先核对远端记录，再决定是否重试。</div>
             </div>
             <div className="form-row">
               <label className="label">系统通知（Windows toast）</label>
@@ -185,10 +190,11 @@ export default function SettingsPage() {
               <input className="input" type="number" value={form.materialSoftLimit} onChange={(e) => set('materialSoftLimit', Number(e.target.value))} />
             </div>
           </div>
-        </div>
+        </details>
 
-        <div className="settings-group">
-          <h3>提示词模板（占位符 {'{{ }}'} 不可删改，可编辑文案）</h3>
+        <details className="settings-group">
+          <summary>提示词模板</summary>
+          <p className="form-hint">可编辑模板文案，请保留 {'{{ }}'} 中的占位符。</p>
           {TEMPLATE_FIELDS.map((t) => (
             <div className="form-row" key={t.key}>
               <label className="label">{t.label}</label>
@@ -201,10 +207,10 @@ export default function SettingsPage() {
               {PLACEHOLDER_HINTS[t.key] && <div className="form-hint">{PLACEHOLDER_HINTS[t.key]}</div>}
             </div>
           ))}
-        </div>
+        </details>
 
-        <div className="settings-group">
-          <h3>存储</h3>
+        <details className="settings-group">
+          <summary>本地存储</summary>
           <div className="form-row">
             <label className="label">工作区路径（更改需重启应用）</label>
             <input className="input" value={form.workspacePath} onChange={(e) => set('workspacePath', e.target.value)} />
@@ -224,7 +230,7 @@ export default function SettingsPage() {
           >
             清空回收站
           </button>
-        </div>
+        </details>
 
         <div className="settings-actions">
           <button className="btn btn-primary" disabled={saving} onClick={() => void save()}>
