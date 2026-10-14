@@ -28,6 +28,21 @@ export interface RegionPayload {
   refTokens: RefToken[];
 }
 
+export interface RefSearchStatus {
+  source: string;
+  browserInstalled: boolean;
+  profileExists: boolean;
+  loginState: 'idle' | 'waiting' | 'done' | 'error';
+  loginError: string;
+}
+
+export interface RefSearchItem {
+  id: string;
+  noteUrl: string;
+  thumbUrl: string;
+  title: string;
+}
+
 export const api = {
   jobs: () => fetch('/api/jobs').then((r) => j<{ jobs: JobSummary[] }>(r)),
   job: (id: string) => fetch(`/api/jobs/${id}`).then((r) => j<JobDetail>(r)),
@@ -99,6 +114,13 @@ export const api = {
   },
   extractPlate: (jobId: string, effectDescription?: string) =>
     fetch('/api/library/extract-plate', jsonInit('POST', { jobId, effectDescription })).then((r) => j<{ itemId: string; description: string }>(r)),
+
+  refSearchStatus: () => fetch('/api/refsearch/status').then((r) => j<RefSearchStatus>(r)),
+  refSearchLogin: () => fetch('/api/refsearch/login', jsonInit('POST', {})).then((r) => j<{ started: boolean; message: string }>(r)),
+  refSearchSearch: (keyword: string, limit?: number) => fetch('/api/refsearch/search', jsonInit('POST', { keyword, limit })).then((r) => j<{ source: string; items: RefSearchItem[] }>(r)),
+  refSearchImport: (jobId: string, imageUrl: string, title: string) =>
+    fetch('/api/refsearch/import', jsonInit('POST', { jobId, imageUrl, title })).then((r) => j<{ id: string; orderIndex: number; displayName: string; warning?: string | null }>(r)),
+  refSearchThumb: (u: string) => `/api/refsearch/thumb?u=${encodeURIComponent(u)}`,
 
   settings: () => fetch('/api/settings').then((r) => j<Settings>(r)),
   saveSettings: (patch: Partial<Settings>) => fetch('/api/settings', jsonInit('PUT', patch)).then((r) => j<Settings>(r)),

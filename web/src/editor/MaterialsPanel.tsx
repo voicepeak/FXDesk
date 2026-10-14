@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
 import LibraryPicker from '../components/LibraryPicker';
+import RefSearchModal from '../components/RefSearchModal';
 import { cls } from '../util';
 import type { Material } from '../types';
 
 interface Props {
   jobId: string;
+  character: string;
   materials: Material[];
   onChanged: () => void;
   softLimit: number;
@@ -15,6 +17,7 @@ interface Props {
 export default function MaterialsPanel(props: Props) {
   const { toast } = useStore();
   const [showPicker, setShowPicker] = useState(false);
+  const [showRefSearch, setShowRefSearch] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [dragId, setDragId] = useState<string | null>(null);
@@ -152,6 +155,9 @@ export default function MaterialsPanel(props: Props) {
           <button className="btn btn-sm" onClick={() => setShowPicker(true)}>
             从素材库选择
           </button>
+          <button className="btn btn-sm" onClick={() => setShowRefSearch(true)}>
+            网络搜参考
+          </button>
           <span className="muted" style={{ fontSize: 11, alignSelf: 'center' }}>顺序即参考图编号</span>
         </div>
 
@@ -201,8 +207,8 @@ export default function MaterialsPanel(props: Props) {
                 </div>
               )}
               <div className="material-tags">
-                <span className={cls('chip', 'chip-mini', m.source === 'client' ? 'chip-amber' : 'chip-green')}>
-                  {m.source === 'client' ? '客户' : '库'}
+                <span className={cls('chip', 'chip-mini', m.source === 'client' ? 'chip-amber' : m.source === 'web' ? 'chip-blue' : 'chip-green')}>
+                  {m.source === 'client' ? '客户' : m.source === 'web' ? '网络' : '库'}
                 </span>
               </div>
             </div>
@@ -231,6 +237,14 @@ export default function MaterialsPanel(props: Props) {
               toast(e instanceof Error ? e.message : String(e), 'error');
             }
           }}
+        />
+      )}
+      {showRefSearch && (
+        <RefSearchModal
+          jobId={props.jobId}
+          initialKeyword={props.character}
+          onClose={() => setShowRefSearch(false)}
+          onImported={props.onChanged}
         />
       )}
     </>

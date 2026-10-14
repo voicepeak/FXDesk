@@ -14,6 +14,7 @@ import { registerLibraryRoutes } from './routes/library';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerFilesRoutes } from './routes/files';
 import { registerEventsRoutes } from './routes/events';
+import { registerRefSearchRoutes } from './routes/refsearch';
 
 const PORT = Number(process.env.PORT ?? 3210);
 
@@ -46,6 +47,7 @@ async function main(): Promise<void> {
   registerLibraryRoutes(app);
   registerFilesRoutes(app);
   registerEventsRoutes(app);
+  registerRefSearchRoutes(app);
 
   const webDist = path.join(PROJECT_ROOT, 'web', 'dist');
   if (fs.existsSync(path.join(webDist, 'index.html'))) {

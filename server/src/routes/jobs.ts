@@ -74,7 +74,7 @@ async function importOriginal(jobDirAbs: string, filename: string, buf: Buffer):
   return { rawPath, normalizedPath, width: meta.width ?? 0, height: meta.height ?? 0 };
 }
 
-function writeJobSnapshot(jobId: string): void {
+export function writeJobSnapshot(jobId: string): void {
   try {
     const db = getDb();
     const job = db.prepare('SELECT * FROM jobs WHERE id=?').get(jobId) as JobRow | undefined;
@@ -232,7 +232,7 @@ export function registerJobsRoutes(app: FastifyInstance): void {
         source: m.source,
         libraryItemId: m.library_item_id,
         displayName: m.display_name,
-        fileUrl: m.source === 'client' && m.file_path ? `/api/files/${m.file_path}` : libraryFileUrl(m.library_item_id),
+        fileUrl: m.file_path ? `/api/files/${m.file_path}` : libraryFileUrl(m.library_item_id),
         orderIndex: m.order_index,
       })),
       regions: regions.map((r) => ({
@@ -639,7 +639,7 @@ export function registerJobsRoutes(app: FastifyInstance): void {
           m.display_name,
           m.order_index
         );
-      } else if (m.source === 'client' && m.file_path) {
+      } else if ((m.source === 'client' || m.source === 'web') && m.file_path) {
         const srcFile = abs(m.file_path);
         if (!fs.existsSync(srcFile)) continue;
         const base = path.basename(srcFile);
@@ -648,7 +648,7 @@ export function registerJobsRoutes(app: FastifyInstance): void {
         db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index) VALUES (?, ?, ?, NULL, ?, ?, ?)').run(
           newMid,
           newId,
-          'client',
+          m.source,
           m.display_name,
           rel(target),
           m.order_index
