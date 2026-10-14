@@ -1,0 +1,7 @@
+node_modules/
+workspace/
+fxdesk.config.json
+web/dist/
+server/dist/
+*.log
+.DS_Store

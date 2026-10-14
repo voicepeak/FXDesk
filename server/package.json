@@ -1,0 +1,37 @@
+{
+  "name": "fxdesk-server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "db:init": "tsx src/cli/db-init.ts",
+    "init-config": "tsx src/cli/init-config.ts",
+    "seed": "tsx src/cli/seed.ts",
+    "setup-models": "node scripts/setup-models.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^9.0.1",
+    "@fastify/static": "^8.0.3",
+    "better-sqlite3": "^12.2.0",
+    "fastify": "^5.2.0",
+    "node-notifier": "^10.0.1",
+    "p-queue": "^8.0.1",
+    "sharp": "^0.34.0",
+    "ssim.js": "^3.5.0"
+  },
+  "optionalDependencies": {
+    "onnxruntime-node": "^1.20.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^24.0.0",
+    "@types/node-notifier": "^8.0.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

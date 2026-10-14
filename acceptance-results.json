@@ -1,0 +1,128 @@
+{
+  "ranAt": "2026-10-13T20:20:31.992Z",
+  "mode": "mock（离线模拟管线；真实 API 验收条目见 ACCEPTANCE.md）",
+  "passed": 20,
+  "total": 20,
+  "results": [
+    {
+      "id": "1.1",
+      "name": "设置读写 + 开启模拟模式（含关闭通知音）",
+      "pass": true,
+      "detail": "mockApi=true，通知已关闭"
+    },
+    {
+      "id": "1.2",
+      "name": "测试连接（GET /v1/models）",
+      "pass": true,
+      "detail": "模型 3 个"
+    },
+    {
+      "id": "1.3",
+      "name": "顶栏余额（GET /api/usage/token/ 代理）",
+      "pass": true,
+      "detail": "balance=99.9"
+    },
+    {
+      "id": "2.1",
+      "name": "新建客单（multipart 原图 ≤50MB）",
+      "pass": true,
+      "detail": "id=20261014-01 1200×1600"
+    },
+    {
+      "id": "2.2",
+      "name": "添加客户素材（剑）",
+      "pass": true,
+      "detail": "参考图1=剑（客户）"
+    },
+    {
+      "id": "2.3",
+      "name": "从库添加素材（闪电，库素材以引用关联）",
+      "pass": true,
+      "detail": "参考图2=闪电（库 cd3a0003）"
+    },
+    {
+      "id": "3.1",
+      "name": "画 2 个框 + 填指令 + 全局指令（服务端拼装预览）",
+      "pass": true,
+      "detail": "拼装 469 字，区域线条目完整"
+    },
+    {
+      "id": "3.2",
+      "name": "空指令拦截（第3个空框 → 生成被拒）",
+      "pass": true,
+      "detail": "空指令被正确拦截（EMPTY_INSTRUCTION）"
+    },
+    {
+      "id": "4.1",
+      "name": "点击生成 → 入队 → 生成中 → 质检 → 待审核",
+      "pass": true,
+      "detail": "Run1 done，费用 ¥0.3，耗时 1111ms"
+    },
+    {
+      "id": "4.2",
+      "name": "SSE 推送（snapshot / job_update / run_progress）",
+      "pass": true,
+      "detail": "job_update×16，阶段 queued,uploading,generating,downloading,qc,review"
+    },
+    {
+      "id": "5.1",
+      "name": "结果文件 + QC（身份/构图）+ 无标记残留",
+      "pass": true,
+      "detail": "QC：构图 ok（SSIM 1，pHash 0）；身份 skipped(no_face)"
+    },
+    {
+      "id": "6.1",
+      "name": "通过交付 → delivered + 03_delivery/final_v1.png",
+      "pass": true,
+      "detail": "剑、剑身、闪电、雨夜街道、紫色、验收-雨夜剑闪"
+    },
+    {
+      "id": "7.1",
+      "name": "历史成果归档（自动标签含 剑/闪电/颜色）+ 搜索 + ⭐",
+      "pass": true,
+      "detail": "标签：剑、剑身、闪电、雨夜街道、紫色、验收-雨夜剑闪"
+    },
+    {
+      "id": "8.1",
+      "name": "提取净版 → candidate（黑底无人物）→ ⭐ 升为正式",
+      "pass": true,
+      "detail": "item 79242a9e → active + 收藏夹"
+    },
+    {
+      "id": "9.1",
+      "name": "复用配方 → 新 draft 带原区域与指令结构 → 换图",
+      "pass": true,
+      "detail": "新客单 20261014-02（draft，2 区域 2 素材），已换图"
+    },
+    {
+      "id": "10.1",
+      "name": "定点重修 → 新 Run + QC 重新执行",
+      "pass": true,
+      "detail": "Run2 repair done，QC={\"ssim\":1,\"phashDistance\":0,\"verdict\":\"ok\"}"
+    },
+    {
+      "id": "11.1",
+      "name": "生成中重启 → interrupted 可重试 → 重试成功",
+      "pass": true,
+      "detail": "中断恢复 → 重试 Run2 done"
+    },
+    {
+      "id": "12.1",
+      "name": "Key 无效 → 失败红标（错误信息）→ 修复后重试成功",
+      "pass": true,
+      "detail": "失败信息「API Key 无效或过期」→ 修复后 Run2 done"
+    },
+    {
+      "id": "13.1",
+      "name": "删除客单 → 索引移除 + 文件入 trash",
+      "pass": true,
+      "detail": "trash/20261014-05_1791922831987"
+    },
+    {
+      "id": "Z",
+      "name": "恢复设置（关闭模拟 / 清空 Key / 还原 Base URL）",
+      "pass": true,
+      "detail": "已还原为出厂连接配置"
+    }
+  ]
+}

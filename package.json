@@ -1,0 +1,21 @@
+{
+  "name": "fxdesk",
+  "private": true,
+  "version": "1.0.0",
+  "description": "FXDesk 后期特效合成工作台 (PRD v1.0)",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "dev": "concurrently -k -n server,web -c blue,magenta \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "test": "npm run test -w server",
+    "seed": "npm run seed -w server",
+    "setup-models": "npm run setup-models -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
