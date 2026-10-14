@@ -1,5 +1,6 @@
 {
-  "ranAt": "2026-10-13T20:21:02.646Z",
+  "ranAt": "2026-10-14T07:30:16.325Z",
+  "mode": "mock（离线模拟，UI 全流程；真实 Key 条目见 ACCEPTANCE.md）",
   "passed": 14,
   "total": 14,
   "results": [
@@ -41,7 +42,7 @@
     {
       "name": "UI-8 完成后任务栏出卡片，客单进入「待审核」",
       "pass": true,
-      "detail": "job=20261014-05 → review"
+      "detail": "job=20261014-01 → review"
     },
     {
       "name": "UI-9 审核界面（对比图 + QC 横幅 + Run 条）",
@@ -56,7 +57,7 @@
     {
       "name": "UI-11 通过交付 → 已交付 + 归档提示",
       "pass": true,
-      "detail": "✓已交付并归档（标签：剑、剑身、闪电、雨夜街道、紫色、UI验收-01）（状态已确认 delivered）"
+      "detail": "✓已交付并归档（标签：剑、剑身、闪电、雨夜街道、紫色、UI验收-04848）（状态已确认 delivered）"
     },
     {
       "name": "UI-12 素材库：历史成果 + 搜索 + 提取净版",

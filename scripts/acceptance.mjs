@@ -4,15 +4,18 @@
  * 说明：验收在「离线模拟模式」下跑通完整管线（无真实 Key 亦可验收全部流程）；
  *       真实 API 的验收步骤见 ACCEPTANCE.md 中标注 [需真实 Key] 的条目。
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import http from 'node:http';
 import url from 'node:url';
 import Database from 'better-sqlite3';
 
+const PORT = 3210;
+
 const root = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
-const BASE = 'http://127.0.0.1:3210';
+const BASE = `http://127.0.0.1:${PORT}`;
 const WS = path.join(root, 'workspace');
 const results = [];
 let server = null;
@@ -46,20 +49,71 @@ function fileForm(fieldName, filePath) {
   return fd;
 }
 
+function isPortInUse(port = PORT) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', (e) => resolve(e.code === 'EADDRINUSE'));
+    srv.once('listening', () => srv.close(() => resolve(false)));
+    srv.listen(port, '127.0.0.1');
+  });
+}
+
+async function assertPortFree() {
+  if (await isPortInUse()) {
+    console.error(
+      `\n[验收中止] 端口 ${PORT} 已被占用：可能有旧的服务/dev 进程在运行。\n` +
+        `请先关闭占用进程（例如结束 npm run dev 后重试；PowerShell：Get-NetTCPConnection -LocalPort ${PORT} | Select OwningProcess），\n` +
+        `否则验收会误打到旧服务上，结果不可信。`
+    );
+    process.exit(1);
+  }
+}
+
 function spawnServer() {
   const child = spawn(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'server/src/index.ts'], {
     cwd: root,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PORT: '3210' },
+    env: { ...process.env, PORT: String(PORT) },
   });
+  child.fxExited = null;
   child.stdout.on('data', (d) => process.env.FXDESK_VERBOSE && process.stdout.write(`[srv] ${d}`));
   child.stderr.on('data', (d) => process.stderr.write(`[srv:err] ${d}`));
+  child.on('exit', (code, signal) => {
+    child.fxExited = { code, signal };
+  });
+  child.fxStop = () => new Promise((resolve) => {
+    if (child.fxExited) return resolve();
+    if (process.platform === 'win32') {
+      // Windows 下终止整棵进程树（tsx 会派生子 node 进程，单杀父进程会残留占用端口）
+      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      child.kill('SIGKILL');
+    }
+    const t0 = Date.now();
+    const timer = setInterval(() => {
+      if (child.fxExited || Date.now() - t0 > 15000) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, 100);
+  });
   return child;
+}
+
+async function waitPortFree(timeoutMs = 15000) {
+  const t0 = Date.now();
+  while (await isPortInUse()) {
+    if (Date.now() - t0 > timeoutMs) throw new Error(`等待端口 ${PORT} 释放超时`);
+    await sleep(200);
+  }
 }
 
 async function waitServer(timeoutMs = 40000) {
   const t0 = Date.now();
   for (;;) {
+    if (server?.fxExited) {
+      throw new Error(`服务器进程提前退出（code=${server.fxExited.code}）——端口 ${PORT} 可能被占用`);
+    }
     try {
       const r = await fetch(BASE + '/api/queue');
       if (r.ok) return true;
@@ -106,6 +160,7 @@ console.log('== FXDesk 端到端验收（模拟模式）==');
 const sseEvents = [];
 const sseAbort = new AbortController();
 let sseDone = null;
+await assertPortFree();
 server = spawnServer();
 try {
   await waitServer();
@@ -378,9 +433,9 @@ try {
     // 克隆一个客单，模拟“生成中”
     const c = await api('POST', `/api/jobs/${jobId}/clone`, {});
     const jid = c.json.id;
-    // 停服
-    server.kill();
-    await sleep(1500);
+    // 停服（Windows 下需终止整棵进程树，并等待端口真正释放）
+    await server.fxStop();
+    await waitPortFree();
     // 直接改库模拟中断态
     const db = new Database(path.join(WS, 'db.sqlite'));
     const runId = 'interrupted-' + Date.now();
@@ -447,15 +502,15 @@ try {
   });
 
   /* ---------- 收尾：恢复设置 ---------- */
-  await check('Z', '恢复设置（关闭模拟 / 清空 Key / 还原 Base URL）', async () => {
-    const r = await api('PUT', '/api/settings', { mockApi: false, apiKey: '', baseUrl: 'https://api.momoapi.icu' });
+  await check('Z', '恢复设置（关闭模拟 / 清空 Key / 还原 Base URL / 通知恢复默认开）', async () => {
+    const r = await api('PUT', '/api/settings', { mockApi: false, apiKey: '', baseUrl: 'https://api.momoapi.icu', notifySound: true, notifyToast: true });
     eq(r.status, 200, '恢复');
-    return '已还原为出厂连接配置';
+    return '已还原为出厂配置';
   });
 } finally {
   sseAbort.abort();
   void sseDone;
-  if (server) server.kill();
+  if (server) await server.fxStop();
 }
 
 /* ================= 汇总 ================= */

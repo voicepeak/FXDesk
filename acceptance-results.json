@@ -1,5 +1,5 @@
 {
-  "ranAt": "2026-10-13T20:20:31.992Z",
+  "ranAt": "2026-10-14T07:28:12.633Z",
   "mode": "mock（离线模拟管线；真实 API 验收条目见 ACCEPTANCE.md）",
   "passed": 20,
   "total": 20,
@@ -26,7 +26,7 @@
       "id": "2.1",
       "name": "新建客单（multipart 原图 ≤50MB）",
       "pass": true,
-      "detail": "id=20261014-01 1200×1600"
+      "detail": "id=20261014-09 1200×1600"
     },
     {
       "id": "2.2",
@@ -38,7 +38,7 @@
       "id": "2.3",
       "name": "从库添加素材（闪电，库素材以引用关联）",
       "pass": true,
-      "detail": "参考图2=闪电（库 cd3a0003）"
+      "detail": "参考图2=闪电（库 bbfba7ff）"
     },
     {
       "id": "3.1",
@@ -56,7 +56,7 @@
       "id": "4.1",
       "name": "点击生成 → 入队 → 生成中 → 质检 → 待审核",
       "pass": true,
-      "detail": "Run1 done，费用 ¥0.3，耗时 1111ms"
+      "detail": "Run1 done，费用 ¥0.3，耗时 3579ms"
     },
     {
       "id": "4.2",
@@ -86,13 +86,13 @@
       "id": "8.1",
       "name": "提取净版 → candidate（黑底无人物）→ ⭐ 升为正式",
       "pass": true,
-      "detail": "item 79242a9e → active + 收藏夹"
+      "detail": "item 40bfb207 → active + 收藏夹"
     },
     {
       "id": "9.1",
       "name": "复用配方 → 新 draft 带原区域与指令结构 → 换图",
       "pass": true,
-      "detail": "新客单 20261014-02（draft，2 区域 2 素材），已换图"
+      "detail": "新客单 20261014-10（draft，2 区域 2 素材），已换图"
     },
     {
       "id": "10.1",
@@ -116,13 +116,13 @@
       "id": "13.1",
       "name": "删除客单 → 索引移除 + 文件入 trash",
       "pass": true,
-      "detail": "trash/20261014-05_1791922831987"
+      "detail": "trash/20261014-13_1791962892244"
     },
     {
       "id": "Z",
-      "name": "恢复设置（关闭模拟 / 清空 Key / 还原 Base URL）",
+      "name": "恢复设置（关闭模拟 / 清空 Key / 还原 Base URL / 通知恢复默认开）",
       "pass": true,
-      "detail": "已还原为出厂连接配置"
+      "detail": "已还原为出厂配置"
     }
   ]
 }
