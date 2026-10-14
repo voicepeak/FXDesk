@@ -156,7 +156,11 @@ export function regionLine(region: AssembleRegionInput, templates: AssembleTempl
 export function parseBbox(json: string): Bbox {
   try {
     const b = JSON.parse(json) as Bbox;
-    return { x1: +b.x1 || 0, y1: +b.y1 || 0, x2: +b.x2 || 0, y2: +b.y2 || 0 };
+    return {
+      x1: +b.x1 || 0, y1: +b.y1 || 0, x2: +b.x2 || 0, y2: +b.y2 || 0,
+      ...(['rect', 'ellipse', 'polygon', 'lasso'].includes(b.shape ?? '') ? { shape: b.shape } : {}),
+      ...(Array.isArray(b.points) ? { points: b.points.filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y)).map((p) => ({ x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) })) } : {}),
+    };
   } catch {
     return { x1: 0, y1: 0, x2: 0, y2: 0 };
   }

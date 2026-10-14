@@ -40,7 +40,7 @@ export function badgeCenter(bbox: Bbox, spec: MarkerSpec, W: number, H: number):
 }
 
 export function scaleBbox(b: Bbox, scale: number): Bbox {
-  return { x1: b.x1 * scale, y1: b.y1 * scale, x2: b.x2 * scale, y2: b.y2 * scale };
+  return { ...b, x1: b.x1 * scale, y1: b.y1 * scale, x2: b.x2 * scale, y2: b.y2 * scale };
 }
 
 export function buildMarkerSvg(W: number, H: number, regions: MarkerRegion[]): string {
@@ -55,25 +55,32 @@ export function buildMarkerSvg(W: number, H: number, regions: MarkerRegion[]): s
     const h = Math.abs(b.y2 - b.y1);
     if (w < 1 || h < 1) continue;
 
-    parts.push(
-      `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" ` +
-        `fill="${color}" fill-opacity="0.12" stroke="${color}" stroke-width="${spec.stroke}" />`
-    );
-
-    // 角标（2 倍线宽，可选增强可见性）
-    const cw = spec.stroke * 2;
-    const cl = spec.stroke * 4;
-    const corners: [number, number, number, number][] = [
-      [x, y, 1, 1],
-      [x + w, y, -1, 1],
-      [x, y + h, 1, -1],
-      [x + w, y + h, -1, -1],
-    ];
-    for (const [cx0, cy0, sx, sy] of corners) {
+    if (b.shape === 'ellipse') {
+      parts.push(`<ellipse cx="${(x + w / 2).toFixed(1)}" cy="${(y + h / 2).toFixed(1)}" rx="${(w / 2).toFixed(1)}" ry="${(h / 2).toFixed(1)}" fill="none" stroke="${color}" stroke-width="${spec.stroke}" />`);
+    } else if ((b.shape === 'polygon' || b.shape === 'lasso') && b.points?.length) {
+      const points = b.points.map((p) => `${(x + p.x * w).toFixed(1)},${(y + p.y * h).toFixed(1)}`).join(' ');
+      parts.push(`<polygon points="${points}" fill="none" stroke="${color}" stroke-width="${spec.stroke}" stroke-linejoin="round" />`);
+    } else {
       parts.push(
-        `<path d="M ${cx0 + sx * cl} ${cy0} L ${cx0} ${cy0} L ${cx0} ${cy0 + sy * cl}" ` +
-          `fill="none" stroke="${color}" stroke-width="${cw}" />`
+        `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" ` +
+          `fill="none" stroke="${color}" stroke-width="${spec.stroke}" />`
       );
+
+      // 角标（2 倍线宽，可选增强可见性）
+      const cw = spec.stroke * 2;
+      const cl = spec.stroke * 4;
+      const corners: [number, number, number, number][] = [
+        [x, y, 1, 1],
+        [x + w, y, -1, 1],
+        [x, y + h, 1, -1],
+        [x + w, y + h, -1, -1],
+      ];
+      for (const [cx0, cy0, sx, sy] of corners) {
+        parts.push(
+          `<path d="M ${cx0 + sx * cl} ${cy0} L ${cx0} ${cy0} L ${cx0} ${cy0 + sy * cl}" ` +
+            `fill="none" stroke="${color}" stroke-width="${cw}" />`
+        );
+      }
     }
 
     const { cx, cy, r: radius } = badgeCenter(b, spec, W, H);

@@ -8,14 +8,14 @@ import GenerationStatus from '../components/GenerationStatus';
 import ResultLocationButton from '../components/ResultLocationButton';
 import { StatusBadge } from './JobsPage';
 import { cls, paletteColor } from '../util';
-import type { Bbox, JobDetail, Region } from '../types';
+import type { Bbox, JobDetail, Region, SelectionTool } from '../types';
 
 export default function EditorPage({ jobId }: { jobId: string }) {
   const { navigate, toast, settings, refreshJobs, jobs } = useStore();
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [regions, setRegions] = useState<Region[]>([]);
   const [preview, setPreview] = useState<JobDetail['preview'] | null>(null);
-  const [tool, setTool] = useState<'select' | 'rect'>('select');
+  const [tool, setTool] = useState<SelectionTool>('select');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [genBusy, setGenBusy] = useState(false);
@@ -69,11 +69,11 @@ export default function EditorPage({ jobId }: { jobId: string }) {
     (b: Bbox): Bbox => {
       const W = preview?.width ?? 0;
       const H = preview?.height ?? 0;
-      const x1 = Math.max(0, Math.min(b.x1, b.x2));
-      const y1 = Math.max(0, Math.min(b.y1, b.y2));
-      const x2 = Math.min(W || Math.max(b.x1, b.x2), Math.max(b.x1, b.x2));
-      const y2 = Math.min(H || Math.max(b.y1, b.y2), Math.max(b.y1, b.y2));
-      return { x1, y1, x2, y2 };
+      const w = Math.min(W || Infinity, Math.abs(b.x2 - b.x1));
+      const h = Math.min(H || Infinity, Math.abs(b.y2 - b.y1));
+      const x1 = Math.max(0, Math.min(Math.min(b.x1, b.x2), W ? W - w : Infinity));
+      const y1 = Math.max(0, Math.min(Math.min(b.y1, b.y2), H ? H - h : Infinity));
+      return { ...b, x1, y1, x2: x1 + w, y2: y1 + h };
     },
     [preview]
   );
@@ -103,7 +103,7 @@ export default function EditorPage({ jobId }: { jobId: string }) {
         id: crypto.randomUUID(),
         idx: regions.length + 1,
         color: paletteColor(regions.length),
-        bbox: clampBbox({ x1: src.bbox.x1 + 24, y1: src.bbox.y1 + 24, x2: src.bbox.x2 + 24, y2: src.bbox.y2 + 24 }),
+        bbox: clampBbox({ ...src.bbox, x1: src.bbox.x1 + 24, y1: src.bbox.y1 + 24, x2: src.bbox.x2 + 24, y2: src.bbox.y2 + 24 }),
         instruction: src.instruction,
         refTokens: [...src.refTokens],
       };
@@ -156,6 +156,9 @@ export default function EditorPage({ jobId }: { jobId: string }) {
       const t = e.target as HTMLElement | null;
       if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return;
       if (e.key === 'r' || e.key === 'R') setTool('rect');
+      else if (e.key === 'e' || e.key === 'E') setTool('ellipse');
+      else if (e.key === 'p' || e.key === 'P') setTool('polygon');
+      else if (e.key === 'l' || e.key === 'L') setTool('lasso');
       else if (e.key === 'v' || e.key === 'V' || e.key === 'Escape') setTool('select');
       else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
         e.preventDefault();
@@ -201,7 +204,12 @@ export default function EditorPage({ jobId }: { jobId: string }) {
   return (
     <div className="editor">
       <div className="editor-col editor-col-left">
-        <MaterialsPanel jobId={jobId} materials={detail.materials} onChanged={() => void load()} softLimit={settings?.materialSoftLimit ?? 4} />
+        <MaterialsPanel jobId={jobId} character={detail.job.character} materials={detail.materials} onChanged={() => {
+          void api.job(jobId).then((d) => {
+            setDetail((prev) => prev ? { ...prev, materials: d.materials } : d);
+            setPreview(d.preview);
+          }).catch((e) => toast(e.message, 'error'));
+        }} softLimit={settings?.materialSoftLimit ?? 4} />
       </div>
 
       <div className="editor-col">
@@ -227,8 +235,11 @@ export default function EditorPage({ jobId }: { jobId: string }) {
             ⬚ 选择
           </button>
           <button className={cls('tool-btn', tool === 'rect' && 'active')} onClick={() => setTool('rect')} title="快捷键 R">
-            ▭ 框选
+            ▭ 矩形框选
           </button>
+          <button className={cls('tool-btn', tool === 'ellipse' && 'active')} onClick={() => setTool('ellipse')} title="快捷键 E">◯ 椭圆</button>
+          <button className={cls('tool-btn', tool === 'polygon' && 'active')} onClick={() => setTool('polygon')} title="快捷键 P">⬡ 多边形</button>
+          <button className={cls('tool-btn', tool === 'lasso' && 'active')} onClick={() => setTool('lasso')} title="快捷键 L">⌁ 自由套索</button>
           <span className="toolbar-sep" />
           <button className="tool-btn" disabled={!selectedId} onClick={() => selectedId && deleteRegion(selectedId)}>
             删除所选

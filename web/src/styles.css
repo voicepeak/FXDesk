@@ -495,6 +495,23 @@ select {
   background: #e7e8e1;
 }
 
+.canvas-tool-hint {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  width: max-content;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg2);
+  color: var(--text2);
+  font-size: 11px;
+  text-align: center;
+  pointer-events: none;
+}
+
 .editor-toolbar {
   flex: 0 0 auto;
   display: flex;
