@@ -12,6 +12,7 @@ import { renumberRegions } from '../prompt';
 import { queueManager } from '../queue';
 import { emitJobUpdate, emitLibUpdate } from '../sse';
 import { deliverJob } from '../archive';
+import { removePath } from '../fsSafe';
 import { logEvent } from '../logger';
 import type { JobRow, MaterialRow, RegionRow, RunRow } from '../types';
 
@@ -300,7 +301,7 @@ export function registerJobsRoutes(app: FastifyInstance): void {
       } catch {
         // Windows 上偶发 EPERM（文件被短暂占用/杀软扫描）→ 复制后删除
         fs.cpSync(srcDir, dst, { recursive: true });
-        fs.rmSync(srcDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+        removePath(srcDir);
       }
     }
     db.prepare('DELETE FROM job_materials WHERE job_id=?').run(id);
@@ -683,7 +684,7 @@ export function registerJobsRoutes(app: FastifyInstance): void {
     let count = 0;
     if (fs.existsSync(dir)) {
       for (const entry of fs.readdirSync(dir)) {
-        fs.rmSync(ws('trash', entry), { recursive: true, force: true });
+        removePath(ws('trash', entry));
         count++;
       }
     }

@@ -10,6 +10,21 @@ import path from 'node:path';
 import url from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+/** Windows + Node 24：含非 ASCII 路径时 fs.rmSync 静默失效，统一用 unlink/rmdir 组合 */
+function removePathQuiet(target) {
+  try {
+    const st = fs.lstatSync(target);
+    if (st.isDirectory()) {
+      for (const n of fs.readdirSync(target)) removePathQuiet(path.join(target, n));
+      fs.rmdirSync(target);
+    } else {
+      fs.unlinkSync(target);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, '..', '..');
 
@@ -124,17 +139,17 @@ async function tryZip() {
   try {
     console.log(`[models] 回退：下载官方 zip ← ${ZIP_URL}`);
     await download(ZIP_URL, zipPath);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    removePathQuiet(tmpDir);
     fs.mkdirSync(tmpDir, { recursive: true });
     const got = unzip(zipPath, tmpDir, FILES);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-    fs.rmSync(zipPath, { force: true });
+    removePathQuiet(tmpDir);
+    removePathQuiet(zipPath);
     console.log(`[models] zip 解压完成：${got.join(', ')}`);
     return true;
   } catch (e) {
     console.warn(`[models] zip 回退失败：${e.message}`);
-    fs.rmSync(zipPath, { force: true });
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    removePathQuiet(zipPath);
+    removePathQuiet(tmpDir);
     return false;
   }
 }
