@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { encodeKey, isMockMode, loadSettings, publicSettings, updateSettings } from '../settings';
-import { getBalance, listModels, MomoError } from '../momo';
+import { getBalance, testConnection, MomoError } from '../momo';
 import { queueManager } from '../queue';
 
 export function registerSettingsRoutes(app: FastifyInstance): void {
@@ -26,13 +26,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     if (!s.apiKey && !isMockMode(s)) {
       return { ok: false, error: '请先填写 API Key' };
     }
-    try {
-      const models = await listModels(s);
-      return { ok: true, models, message: isMockMode(s) ? `连接成功（模拟模式），预置模型 ${models.length} 个` : `连接成功，可用模型 ${models.length} 个` };
-    } catch (e) {
-      const msg = e instanceof MomoError ? e.message : e instanceof Error ? e.message : String(e);
-      return { ok: false, error: msg };
-    }
+    return testConnection(s);
   });
 
   app.get('/api/balance', async (_req, reply) => {

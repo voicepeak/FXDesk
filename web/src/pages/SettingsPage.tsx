@@ -21,8 +21,21 @@ const TEMPLATE_FIELDS: { key: keyof Settings; label: string }[] = [
   { key: 'tplPlate', label: '净版提取指令' },
 ];
 
+const MOMO_MODEL_PRESETS = ['[Mo]nano-banana-pro', '[yu]gemini-nano-banana-2.1', 'gpt-image-2.5-sunburst'];
+const GRSAI_MODEL_PRESETS = [
+  'nano-banana-2.1',
+  'nano-banana-2',
+  'nano-banana-2-4k-cl',
+  'nano-banana-2-cl',
+  'nano-banana-pro',
+  'nano-banana-pro-cl',
+  'nano-banana-pro-4k-vip',
+  'nano-banana-fast',
+  'gpt-image-2',
+];
+
 export default function SettingsPage() {
-  const { settings, refreshSettings, toast, refreshBalance, balance } = useStore();
+  const { settings, refreshSettings, toast, refreshBalance, balance, balanceError } = useStore();
   const [form, setForm] = useState<Settings | null>(null);
   const [keyDraft, setKeyDraft] = useState('');
   const [saving, setSaving] = useState(false);
@@ -40,6 +53,10 @@ export default function SettingsPage() {
   if (!form) return <div className="loading-page">加载中…</div>;
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setForm((f) => (f ? { ...f, [k]: v } : f));
+
+  const provider: 'momo' | 'grsai' =
+    form.provider === 'auto' ? (/grsai|dakka/i.test(form.baseUrl) ? 'grsai' : 'momo') : form.provider;
+  const modelPresets = [...(provider === 'grsai' ? GRSAI_MODEL_PRESETS : MOMO_MODEL_PRESETS), ...(testResult?.models ?? [])];
 
   const save = async () => {
     setSaving(true);
@@ -92,13 +109,18 @@ export default function SettingsPage() {
               <input className="input" value={form.baseUrl} onChange={(e) => set('baseUrl', e.target.value)} />
             </div>
             <div className="form-row">
+              <label className="label">服务商</label>
+              <select className="select" value={form.provider} onChange={(e) => set('provider', e.target.value as Settings['provider'])}>
+                <option value="auto">自动识别（按 Base URL）</option>
+                <option value="grsai">GrsAI（grsaiapi.com / grsai.ai / dakka）</option>
+                <option value="momo">墨墨（Gemini 兼容 :generateContent）</option>
+              </select>
+            </div>
+            <div className="form-row">
               <label className="label">模型 ID</label>
               <input className="input" value={form.modelId} onChange={(e) => set('modelId', e.target.value)} list="model-list" />
               <datalist id="model-list">
-                <option value="[Mo]nano-banana-pro" />
-                <option value="[yu]gemini-nano-banana-2.1" />
-                <option value="gpt-image-2.5-sunburst" />
-                {testResult?.models?.map((m) => (
+                {modelPresets.map((m) => (
                   <option key={m} value={m} />
                 ))}
               </datalist>
@@ -131,7 +153,11 @@ export default function SettingsPage() {
             {testResult && <span className={testResult.ok ? 'settings-msg ok' : 'settings-msg err'}>{testResult.text}</span>}
           </div>
           <div className="form-hint" style={{ marginTop: 12 }}>
-            余额：{balance ? `${fmtCost(balance.balance)}（剩余 ${balance.totalGranted > 0 ? Math.round((balance.remainQuota / balance.totalGranted) * 100) : '—'}%）` : '不可用'}
+            余额：{balance
+              ? `${fmtCost(balance.balance)}（剩余 ${balance.totalGranted > 0 ? Math.round((balance.remainQuota / balance.totalGranted) * 100) : '—'}%）`
+              : balanceError && provider === 'grsai'
+                ? '不可用（GrsAI 请在官网控制台查看余额）'
+                : '不可用'}
             {' '}
             <button className="btn btn-sm" onClick={() => void refreshBalance()}>
               刷新余额
@@ -184,6 +210,19 @@ export default function SettingsPage() {
             <div className="form-row">
               <label className="label">素材发送长边上限（px）</label>
               <input className="input" type="number" value={form.sendMaxDimension} onChange={(e) => set('sendMaxDimension', Number(e.target.value))} />
+              <div className="form-hint">超限等比缩小后发送；默认 4096，追求输入保真可设 6144（模型看到原图全分辨率）。体积超出接口上限时会自动逐档降档（优先保分辨率），不会一步缩到 2048。</div>
+            </div>
+            <div className="form-row">
+              <label className="label">超分引擎（交付强制回填原图分辨率）</label>
+              <select className="select" value={form.upscaleEngine} onChange={(e) => set('upscaleEngine', e.target.value as Settings['upscaleEngine'])}>
+                <option value="realesrgan">Real-ESRGAN（本地超分，细节增强）</option>
+                <option value="lanczos">Lanczos（快速缩放，无增强）</option>
+              </select>
+              <div className="form-hint">生成结果在质检前强制超分/缩放回填到原图逐像素尺寸。Real-ESRGAN 未安装或运行失败时自动降级 Lanczos 并在审核页标注；安装请运行 npm run setup-upscaler。</div>
+            </div>
+            <div className="form-row">
+              <label className="label">超分超时（秒，独立于生成等待）</label>
+              <input className="input" type="number" min={60} max={3600} value={form.upscaleTimeoutSec} onChange={(e) => set('upscaleTimeoutSec', Number(e.target.value))} />
             </div>
             <div className="form-row">
               <label className="label">素材数软上限（参考图，默认 4）</label>

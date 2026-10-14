@@ -22,6 +22,8 @@ export const DEFAULT_TEMPLATES = {
 export interface AppSettings {
   apiKey: string; // stored as obf:<base64>
   baseUrl: string;
+  /** 服务商协议：auto 按 Base URL 自动识别（含 grsai/dakka → GrsAI，否则墨墨） */
+  provider: 'auto' | 'momo' | 'grsai';
   modelId: string;
   imageSize: '1K' | '2K' | '4K';
   aspectRatio: string; // '' = 自动使用主图最接近的支持比例
@@ -52,6 +54,7 @@ export function defaultSettings(): AppSettings {
   return {
     apiKey: '',
     baseUrl: 'https://api.momoapi.icu',
+    provider: 'auto',
     modelId: '[Mo]nano-banana-pro',
     imageSize: '4K',
     aspectRatio: '',
