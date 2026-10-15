@@ -1,8 +1,12 @@
 /**
- * FXDesk 端到端验收脚本（PRD §12.1）。
+ * FXDesk 端到端验收脚本（PRD §12.1）
  * 用法：node scripts/acceptance.mjs
- * 说明：验收在「离线模拟模式」下跑通完整管线（无真实 Key 亦可验收全部流程）；
- *       真实 API 的验收步骤见 ACCEPTANCE.md 中标注 [需真实 Key] 的条目。
+ * 可选环境变量：
+ *   FXDESK_ACCEPT_PORT  验收服务器端口（默认 3210）
+ *   FXDESK_WORKSPACE    独立工作区目录（默认仓库 workspace/；建议指向临时目录，避免污染真实工作区，
+ *                       也避免与正在运行的 dev 服务共用同一数据库互相干扰）
+ * 说明：验收在「离线模拟模式」下跑通完整管线（无真 Key 亦可验收全部流程）；
+ *       真实 API 的验收步骤见 ACCEPTANCE.md 中标 [需真实 Key] 的条目。
  */
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -12,11 +16,13 @@ import http from 'node:http';
 import url from 'node:url';
 import Database from 'better-sqlite3';
 
-const PORT = 3210;
+const PORT = Number(process.env.FXDESK_ACCEPT_PORT || 3210);
 
 const root = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 const BASE = `http://127.0.0.1:${PORT}`;
-const WS = path.join(root, 'workspace');
+const WS = process.env.FXDESK_WORKSPACE ? path.resolve(process.env.FXDESK_WORKSPACE) : path.join(root, 'workspace');
+fs.mkdirSync(WS, { recursive: true });
+process.env.FXDESK_WORKSPACE = WS;
 const results = [];
 let server = null;
 
@@ -136,6 +142,16 @@ async function waitJobStatus(jobId, statuses, timeoutMs = 180000) {
     await sleep(800);
   }
   throw new Error(`等待状态 ${statuses.join('/')} 超时，最后状态=${last?.job?.status} err=${JSON.stringify(last?.runs?.at(-1)?.error ?? null)}`);
+}
+
+async function waitUntil(fn, timeoutMs, label) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    const v = await fn();
+    if (v) return v;
+    await sleep(600);
+  }
+  throw new Error(`等待「${label}」超时`);
 }
 
 async function check(id, name, fn) {
@@ -499,6 +515,102 @@ try {
     const trashEntries = fs.readdirSync(path.join(WS, 'trash')).filter((f) => f.startsWith(jid));
     expect(trashEntries.length === 1, `文件已移入 trash（${trashEntries.join(',')}）`);
     return `trash/${trashEntries[0]}`;
+  });
+
+  /* ---------- #14 AI 筹备（识别 → 见解 → 特效预演 → 入库 → 合成注入） ---------- */
+  let prepJobId = null;
+  let fxId = null;
+
+  await check('14.1', '角色识别（分析模型 mock）→ 人工确认同步客单角色名', async () => {
+    const c = await api('POST', `/api/jobs/${jobId}/clone`, {});
+    prepJobId = c.json.id;
+    const a = await api('POST', `/api/jobs/${prepJobId}/prep/analyze`, {});
+    eq(a.status, 200, '发起识别');
+    const done = await waitUntil(async () => {
+      const p = await api('GET', `/api/jobs/${prepJobId}/prep`);
+      if (p.json.prep.analysis.status === 'failed') throw new Error(`识别失败：${p.json.prep.analysis.error}`);
+      return p.json.prep.analysis.status === 'done' ? p.json : null;
+    }, 30000, '识别完成');
+    expect(done.prep.analysis.result?.character, '识别出角色名');
+    const save = await api('PUT', `/api/jobs/${prepJobId}/prep/analysis`, { character: '验收角色', work: '验收作品' });
+    eq(save.status, 200, '保存确认');
+    const d = await api('GET', `/api/jobs/${prepJobId}`);
+    eq(d.json.job.character, '验收角色', '角色名已同步客单（用于搜索关键词与归档标签）');
+    return `识别「${done.prep.analysis.result.character}」→ 确认为「验收角色」`;
+  });
+
+  await check('14.2', '特效见解（mock）→ 自动落成特效条目', async () => {
+    const p = await api('POST', `/api/jobs/${prepJobId}/prep/propose`, {});
+    eq(p.status, 200, '发起见解');
+    const done = await waitUntil(async () => {
+      const r = await api('GET', `/api/jobs/${prepJobId}/prep`);
+      if (r.json.prep.proposal.status === 'failed') throw new Error(`见解失败：${r.json.prep.proposal.error}`);
+      return r.json.prep.proposal.status === 'done' && r.json.effects.length ? r.json : null;
+    }, 30000, '见解完成');
+    return `生成 ${done.effects.length} 条特效建议（首条「${done.effects[0].title}」）`;
+  });
+
+  await check('14.3', '特效预演（type=effect Run）→ 1K 草图待确认', async () => {
+    const prep = await api('GET', `/api/jobs/${prepJobId}/prep`);
+    const fx = prep.json.effects?.[0];
+    expect(fx, '存在特效条目（前置见解步骤应已成功）');
+    fxId = fx.id;
+    const upd = await api('PUT', `/api/jobs/${prepJobId}/prep/effects/${fxId}`, {
+      genPrompt: '在人物身体周围添加环绕的蓝紫色闪电弧光，受光与场图环境光方向一致',
+      blendPrompt: '本特效环绕人物身后与两侧，人物位于前景遮挡中段光弧',
+    });
+    eq(upd.status, 200, '编辑生成/融入描述');
+    const g = await api('POST', `/api/jobs/${prepJobId}/prep/effects/${fxId}/generate`, {});
+    eq(g.status, 200, '发起生成');
+    const cur = await waitUntil(async () => {
+      const r = await api('GET', `/api/jobs/${prepJobId}/prep`);
+      const e = r.json.effects.find((x) => x.id === fxId);
+      if (e.status === 'failed') throw new Error(`特效预演失败：${e.error}`);
+      return e.status === 'review' ? e : null;
+    }, 60000, '特效预演完成');
+    expect(cur.imageUrl, '预演图已产出');
+    const job = await api('GET', `/api/jobs/${prepJobId}`);
+    eq(job.json.job.status, 'draft', '特效预演不改变客单状态');
+    return `预演图 ${cur.imageUrl}`;
+  });
+
+  await check('14.4', '审批入库 → 特效素材（含融入说明）+ 加为参考图 + 预览注入', async () => {
+    const r = await api('POST', `/api/jobs/${prepJobId}/prep/effects/${fxId}/approve`, {});
+    eq(r.status, 200, '入库');
+    expect(r.json.refNo >= 1, '已加为参考图');
+    const d = await api('GET', `/api/jobs/${prepJobId}`);
+    const m = d.json.materials.find((x) => x.libraryItemId === r.json.itemId);
+    expect(m, '客单素材已包含特效');
+    eq(m.role, 'effect', '素材用途=特效');
+    expect(m.blendPrompt.includes('环绕人物身后'), '融入说明已随素材带入');
+    const put = await api('PUT', `/api/jobs/${prepJobId}/regions`, {
+      regions: [
+        {
+          color: '#E53935',
+          bbox: { x1: 100, y1: 100, x2: 600, y2: 600 },
+          instruction: `把参考图${m.orderIndex}的特效溶入画面，注意人物遮挡关系`,
+          refTokens: [{ materialId: m.id, refNo: m.orderIndex, name: m.displayName }],
+        },
+      ],
+    });
+    eq(put.status, 200, '区域引用已保存');
+    const pv = await api('GET', `/api/jobs/${prepJobId}/prompt-preview`);
+    expect(pv.json.finalPrompt.includes('融入要求'), '预览提示词含融入要求');
+    expect(pv.json.finalPrompt.includes('环绕人物身后'), '预览提示词含融入原文');
+    const lib = await api('GET', '/api/library/items?zone=library');
+    const item = (lib.json.items ?? []).find((i) => i.id === r.json.itemId);
+    eq(item?.type, 'effect', '库素材类型=effect');
+    expect(item.blendPrompt.includes('环绕人物身后'), '库素材保留融入说明');
+    return `库素材 type=effect + 参考图${r.json.refNo} + 预览注入`;
+  });
+
+  await check('14.5', '最终合成 Run 提示词自动携带融入说明', async () => {
+    const g = await api('POST', `/api/jobs/${prepJobId}/generate`, {});
+    eq(g.status, 200, '入队合成');
+    const done = await waitJobStatus(prepJobId, ['review'], 180000);
+    const run = done.runs.find((x) => x.finalPrompt && x.finalPrompt.includes('融入要求'));
+    expect(run, '生成 Run 全文包含融入要求');
+    return `Run${run.seq} finalPrompt 已注入`;
   });
 
   /* ---------- 收尾：恢复设置 ---------- */

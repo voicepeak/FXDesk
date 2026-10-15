@@ -1,8 +1,8 @@
 {
-  "ranAt": "2026-10-14T07:28:12.633Z",
+  "ranAt": "2026-10-15T06:50:25.927Z",
   "mode": "mock（离线模拟管线；真实 API 验收条目见 ACCEPTANCE.md）",
-  "passed": 20,
-  "total": 20,
+  "passed": 25,
+  "total": 25,
   "results": [
     {
       "id": "1.1",
@@ -26,7 +26,7 @@
       "id": "2.1",
       "name": "新建客单（multipart 原图 ≤50MB）",
       "pass": true,
-      "detail": "id=20261014-09 1200×1600"
+      "detail": "id=20261015-01 1200×1600"
     },
     {
       "id": "2.2",
@@ -38,7 +38,7 @@
       "id": "2.3",
       "name": "从库添加素材（闪电，库素材以引用关联）",
       "pass": true,
-      "detail": "参考图2=闪电（库 bbfba7ff）"
+      "detail": "参考图2=闪电（库 0a6c6a54）"
     },
     {
       "id": "3.1",
@@ -56,13 +56,13 @@
       "id": "4.1",
       "name": "点击生成 → 入队 → 生成中 → 质检 → 待审核",
       "pass": true,
-      "detail": "Run1 done，费用 ¥0.3，耗时 3579ms"
+      "detail": "Run1 done，费用 ¥0.3，耗时 3815ms"
     },
     {
       "id": "4.2",
       "name": "SSE 推送（snapshot / job_update / run_progress）",
       "pass": true,
-      "detail": "job_update×16，阶段 queued,uploading,generating,downloading,qc,review"
+      "detail": "job_update×20，阶段 queued,uploading,generating,downloading,upscaling,qc,review"
     },
     {
       "id": "5.1",
@@ -86,13 +86,13 @@
       "id": "8.1",
       "name": "提取净版 → candidate（黑底无人物）→ ⭐ 升为正式",
       "pass": true,
-      "detail": "item 40bfb207 → active + 收藏夹"
+      "detail": "item 7d81e25e → active + 收藏夹"
     },
     {
       "id": "9.1",
       "name": "复用配方 → 新 draft 带原区域与指令结构 → 换图",
       "pass": true,
-      "detail": "新客单 20261014-10（draft，2 区域 2 素材），已换图"
+      "detail": "新客单 20261015-02（draft，2 区域 2 素材），已换图"
     },
     {
       "id": "10.1",
@@ -116,7 +116,37 @@
       "id": "13.1",
       "name": "删除客单 → 索引移除 + 文件入 trash",
       "pass": true,
-      "detail": "trash/20261014-13_1791962892244"
+      "detail": "trash/20261015-05_1792047017338"
+    },
+    {
+      "id": "14.1",
+      "name": "角色识别（分析模型 mock）→ 人工确认同步客单角色名",
+      "pass": true,
+      "detail": "识别「示例角色」→ 确认为「验收角色」"
+    },
+    {
+      "id": "14.2",
+      "name": "特效见解（mock）→ 自动落成特效条目",
+      "pass": true,
+      "detail": "生成 1 条特效建议（首条「主体光效」）"
+    },
+    {
+      "id": "14.3",
+      "name": "特效预演（type=effect Run）→ 1K 草图待确认",
+      "pass": true,
+      "detail": "预演图 /api/files/jobs/20261015-05/02_runs/run_0001/result.jpg"
+    },
+    {
+      "id": "14.4",
+      "name": "审批入库 → 特效素材（含融入说明）+ 加为参考图 + 预览注入",
+      "pass": true,
+      "detail": "库素材 type=effect + 参考图3 + 预览注入"
+    },
+    {
+      "id": "14.5",
+      "name": "最终合成 Run 提示词自动携带融入说明",
+      "pass": true,
+      "detail": "Run2 finalPrompt 已注入"
     },
     {
       "id": "Z",
