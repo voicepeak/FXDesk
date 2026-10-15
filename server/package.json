@@ -12,6 +12,7 @@
     "setup-models": "node scripts/setup-models.mjs",
     "face-lock-compare": "tsx scripts/face-lock-compare.mts",
     "adopt-remote": "tsx scripts/adopt-remote.mts",
+    "repair-face": "tsx scripts/repair-face.mts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
