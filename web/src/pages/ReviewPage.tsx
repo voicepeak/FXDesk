@@ -286,6 +286,15 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
 
   const identityView = (() => {
     if (!identity) return { cls: 'qc-skip', text: '身份检测：无数据' };
+    if (identity.afterLock) {
+      const ok = identity.afterLock.status === 'pass';
+      const before = identity.afterRepair?.sim != null ? identity.afterRepair.sim : identity.sim;
+      const fmt = (v: number | null | undefined) => (v != null ? v.toFixed(3) : '—');
+      return {
+        cls: ok ? 'qc-ok' : 'qc-bad',
+        text: `身份 ${fmt(before)} → 锁脸复检 ${fmt(identity.afterLock.sim)} · ${ok ? '通过' : '未达 0.95 硬门槛，请人工处理'}`,
+      };
+    }
     if (identity.status === 'pass') return { cls: 'qc-ok', text: `身份相似度 ${identity.sim?.toFixed(3)} · 通过` };
     if (identity.status === 'mid')
       return {
@@ -296,6 +305,29 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
     if (identity.reason === 'model_missing') return { cls: 'qc-skip', text: '身份检测未启用（QC 模型未安装），请目检' };
     if (identity.reason === 'no_face') return { cls: 'qc-skip', text: '身份：未检测到人脸（侧脸/遮挡），请目检' };
     return { cls: 'qc-skip', text: '身份：检测跳过，请目检' };
+  })();
+
+  const faceLockView = (() => {
+    const lock = qc?.faceLock;
+    if (!lock) return null;
+    if (!lock.applied) {
+      const reasonText =
+        lock.reason === 'no_face'
+          ? '未检测到人脸'
+          : lock.reason === 'face_too_small'
+            ? '人脸过小'
+            : lock.reason === 'align_out_of_bounds'
+              ? '对齐越界'
+              : '执行失败';
+      return { cls: 'qc-warn' as const, text: `锁脸未执行（${reasonText}）` };
+    }
+    const threshold = lock.passThreshold != null ? lock.passThreshold : 0.95;
+    return {
+      cls: lock.pass ? ('qc-ok' as const) : ('qc-bad' as const),
+      text: lock.pass
+        ? `锁脸已完成（复制图层 + 光照匹配，复检 ${lock.simAfter != null ? lock.simAfter.toFixed(3) : '—'} ≥ ${threshold}）`
+        : `锁脸后复检 ${lock.simAfter != null ? lock.simAfter.toFixed(3) : '—'} 未达 ${threshold}，请人工处理`,
+    };
   })();
 
   const compositionView = composition
@@ -313,6 +345,7 @@ export default function ReviewPage({ jobId }: { jobId: string }) {
         <span style={{ fontWeight: 700 }}>{detail.job.name}</span>
         <StatusBadge status={detail.job.status} />
         <span className={cls('qc-item', identityView.cls)}>◉ {identityView.text}</span>
+        {faceLockView && <span className={cls('qc-item', faceLockView.cls)}>⧉ {faceLockView.text}</span>}
         <span className={cls('qc-item', compositionView.cls)}>◫ {compositionView.text}</span>
         {qc?.faceRepair?.triggered && (
           <span className={cls('qc-item', qc.faceRepair.status === 'done' ? 'qc-ok' : 'qc-bad')}>

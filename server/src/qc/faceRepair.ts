@@ -2,6 +2,7 @@ import sharp from 'sharp';
 import { detectFaces, pickFacePair } from './faces';
 import { generateWithFallback } from '../momo';
 import { loadSettings } from '../settings';
+import { closestAspectRatio } from '../imageGeometry';
 import type { Bbox } from '../types';
 
 export interface FaceRepairOutput {
@@ -80,11 +81,14 @@ export async function performFaceRepair(opts: { origAbs: string; resultAbs: stri
     prompt: settings.tplFaceRepair,
     signal: opts.signal,
     settings,
+    // 明确请求与裁片一致的比例，避免模型返回异比例后被拉伸变形
+    aspectRatio: closestAspectRatio(resCropW, resCropH),
     mockReturn: { mime: 'image/png', base64: origCropSend.toString('base64') },
   });
 
+  // cover + 居中裁剪：等比缩放后裁到目标尺寸，绝不拉伸（拉伸会造成脸部畸变）
   const repaired = await sharp(Buffer.from(gen.base64, 'base64'))
-    .resize(resCropW, resCropH, { fit: 'fill' })
+    .resize(resCropW, resCropH, { fit: 'cover', position: 'center' })
     .png()
     .toBuffer();
 

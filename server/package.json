@@ -10,6 +10,8 @@
     "init-config": "tsx src/cli/init-config.ts",
     "seed": "tsx src/cli/seed.ts",
     "setup-models": "node scripts/setup-models.mjs",
+    "face-lock-compare": "tsx scripts/face-lock-compare.mts",
+    "adopt-remote": "tsx scripts/adopt-remote.mts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
