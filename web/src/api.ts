@@ -146,8 +146,8 @@ export const api = {
 
   settings: () => fetch('/api/settings').then((r) => j<Settings>(r)),
   saveSettings: (patch: Partial<Settings>) => fetch('/api/settings', jsonInit('PUT', patch)).then((r) => j<Settings>(r)),
-  testConnection: (apiKey?: string, baseUrl?: string) =>
-    fetch('/api/settings/test-connection', jsonInit('POST', { apiKey, baseUrl })).then((r) => j<{ ok: boolean; models?: string[]; message?: string; error?: string }>(r)),
+  testConnection: (apiKey?: string, baseUrl?: string, provider?: string) =>
+    fetch('/api/settings/test-connection', jsonInit('POST', { apiKey, baseUrl, provider })).then((r) => j<{ ok: boolean; models?: string[]; message?: string; error?: string }>(r)),
   balance: () => fetch('/api/balance').then((r) => j<BalanceInfo>(r)),
   emptyTrash: () => fetch('/api/trash/empty', jsonInit('POST', {})).then((r) => j<{ ok: boolean; removed: number }>(r)),
 };

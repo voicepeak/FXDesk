@@ -19,9 +19,10 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
   });
 
   app.post('/api/settings/test-connection', async (req) => {
-    const body = (req.body ?? {}) as { apiKey?: string; baseUrl?: string };
+    const body = (req.body ?? {}) as { apiKey?: string; baseUrl?: string; provider?: string };
     const s = { ...loadSettings() };
     if (body.baseUrl) s.baseUrl = body.baseUrl;
+    if (body.provider === 'auto' || body.provider === 'momo' || body.provider === 'grsai') s.provider = body.provider;
     if (body.apiKey && body.apiKey !== 'obf:***') s.apiKey = encodeKey(body.apiKey);
     if (!s.apiKey && !isMockMode(s)) {
       return { ok: false, error: '请先填写 API Key' };

@@ -105,7 +105,7 @@ export default function SettingsPage() {
     setTesting(true);
     setTestResult(null);
     try {
-      const r = await api.testConnection(keyDraft === 'obf:***' ? undefined : keyDraft, form.baseUrl);
+      const r = await api.testConnection(keyDraft === 'obf:***' ? undefined : keyDraft, form.baseUrl, form.provider);
       setTestResult({ ok: r.ok, text: r.ok ? r.message ?? '连接成功' : `失败：${r.error}`, models: r.models });
       if (r.ok) void refreshBalance();
     } catch (e) {
