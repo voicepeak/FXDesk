@@ -1,13 +1,14 @@
 import { useStore } from '../store';
-import { cls, fmtDuration, STAGE_LABELS } from '../util';
+import { cls, fmtDuration, friendlyRunError, STAGE_LABELS } from '../util';
 
 export default function GenerationStatus({ jobId }: { jobId: string }) {
   const { queue, jobs } = useStore();
   const run = queue?.active.find((a) => a.jobId === jobId);
   const waiting = queue?.pending.find((a) => a.jobId === jobId);
   const job = jobs.find((j) => j.id === jobId);
+  const lastError = friendlyRunError(job?.lastRun?.error);
   if (!run && !waiting) {
-    return job?.status === 'failed' && job.lastRun?.error ? <div className="generation-status is-slow" role="status"><strong>本次生成未完成</strong><span>{job.lastRun.error}</span></div> : null;
+    return job?.status === 'failed' && lastError ? <div className="generation-status is-slow" role="status"><strong>本次生成未完成</strong><span>{lastError}</span></div> : null;
   }
   if (!run) return <div className="generation-status" role="status"><strong>排队第 {waiting!.position} 位</strong><span>当前最多同时处理 {queue?.concurrency} 笔客单</span></div>;
   const isEffect = run.runType === 'effect';

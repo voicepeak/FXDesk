@@ -1,7 +1,8 @@
 /**
  * 远端结果取回（通用恢复工具）
  * 场景：本地轮询超时/中断，但远端任务其实已完成（如 GrsAI 任务 succeeded）。
- * 用法：npm run adopt-remote -w server -- <jobId> <taskId>
+ * 用法：npm run adopt-remote -w server -- <jobId> <taskId> [runSeq]
+ *   - 省略 runSeq 时取该客单最新 Run；指定则回填到对应序号的 Run（如中断发生在中途 Run 时）
  * 行为：查询远端任务 → 下载结果 → 超分回填至原图分辨率 → 构图/身份质检 → 更新 Run/客单状态为待审核。
  */
 import fs from 'node:fs';
@@ -17,9 +18,9 @@ import { analyzeComposition } from '../src/qc/composition';
 import { runDirName } from '../src/queue';
 import type { JobRow, QcResult, RunRow } from '../src/types';
 
-const [jobId, taskId] = process.argv.slice(2);
+const [jobId, taskId, seqArg] = process.argv.slice(2);
 if (!jobId || !taskId) {
-  console.error('用法：npm run adopt-remote -w server -- <jobId> <taskId>');
+  console.error('用法：npm run adopt-remote -w server -- <jobId> <taskId> [runSeq]');
   process.exit(1);
 }
 
@@ -31,9 +32,11 @@ if (!job) {
   console.error(`客单不存在：${jobId}`);
   process.exit(1);
 }
-const run = db.prepare("SELECT * FROM runs WHERE job_id=? ORDER BY seq DESC LIMIT 1").get(jobId) as RunRow | undefined;
+const run = (seqArg
+  ? db.prepare('SELECT * FROM runs WHERE job_id=? AND seq=?').get(jobId, Number(seqArg))
+  : db.prepare('SELECT * FROM runs WHERE job_id=? ORDER BY seq DESC LIMIT 1').get(jobId)) as RunRow | undefined;
 if (!run) {
-  console.error('该客单没有 Run 记录');
+  console.error(seqArg ? `该客单没有序号为 ${seqArg} 的 Run` : '该客单没有 Run 记录');
   process.exit(1);
 }
 

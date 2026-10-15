@@ -90,6 +90,13 @@ export function fmtTime(ts: number | null | undefined): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/** Run 错误的人性化显示（不改数据库原值，仅展示层映射） */
+export function friendlyRunError(err: string | null | undefined): string | null {
+  if (!err) return null;
+  if (err === 'interrupted') return '服务重启导致中断：可点「重试」或「重跑」';
+  return err;
+}
+
 export const STATUS_LABELS: Record<JobStatus, string> = {
   draft: '编辑中',
   queued: '排队中',

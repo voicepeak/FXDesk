@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { useStore, type Route } from '../store';
-import { cls, fmtCost, fmtDuration, JOB_GROUPS, STATUS_LABELS, STAGE_LABELS, statusGroup, taskStatusClass } from '../util';
+import { cls, fmtCost, fmtDuration, friendlyRunError, JOB_GROUPS, STATUS_LABELS, STAGE_LABELS, statusGroup, taskStatusClass } from '../util';
 import type { JobStatus } from '../types';
 
 export default function TaskBar({ onNewJob, onNavigate }: { onNewJob(): void; onNavigate(): void }) {
@@ -22,6 +22,20 @@ export default function TaskBar({ onNewJob, onNavigate }: { onNewJob(): void; on
       if (action === 'cancel') await api.cancelRun(runId);
       else await api.retryRun(runId);
       toast(action === 'cancel' ? (active.some((a) => a.runId === runId) ? '已停止「' + name + '」的本地等待；远端可能仍在处理，请核对记录' : '已取消「' + name + '」的排队') : '「' + name + '」已重新入队');
+      await Promise.all([refreshQueue(), refreshJobs()]);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error');
+    } finally {
+      setBusyRun(null);
+    }
+  };
+
+  /** 面部重修 Run 不能单独重试（服务端约束）：按当前配置整单重跑（rerun） */
+  const rerunJob = async (jobId: string, name: string, baseRunId: string) => {
+    setBusyRun(baseRunId);
+    try {
+      await api.generate(jobId, { type: 'rerun', baseRunId });
+      toast('「' + name + '」已按当前配置重跑（rerun）');
       await Promise.all([refreshQueue(), refreshJobs()]);
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), 'error');
@@ -58,7 +72,7 @@ export default function TaskBar({ onNewJob, onNavigate }: { onNewJob(): void; on
                   const selected = 'jobId' in route && route.jobId === job.id;
                   const runId = job.running?.runId ?? job.waiting?.runId;
                   const meta = job.running ? (job.running.message ?? STAGE_LABELS[job.running.stage] ?? '生成中') + ' · ' + fmtDuration(job.running.elapsed) : job.waiting ? '排队第 ' + job.waiting.position + ' 位' : STATUS_LABELS[job.status];
-                  const error = job.status === 'failed' ? job.lastRun?.error : null;
+                  const error = job.status === 'failed' ? friendlyRunError(job.lastRun?.error) : null;
                   return (
                     <div className={cls('sidebar-task', selected && 'selected')} key={job.id}>
                       <button className="sidebar-task-open" aria-current={selected ? 'page' : undefined} title={job.name + '\n' + (error ?? meta)} onClick={() => navigate(job.status === 'review' || job.status === 'delivered' ? { name: 'review', jobId: job.id } : { name: 'editor', jobId: job.id })}>
@@ -69,7 +83,21 @@ export default function TaskBar({ onNewJob, onNavigate }: { onNewJob(): void; on
                       </button>
                       {job.running?.stage === 'retrying' && <span className="sidebar-task-notice">远端限流 · 等待重试</span>}
                       {job.running?.stage === 'generating' && job.running.elapsed >= 120000 && <span className="sidebar-task-notice">等待远端结果</span>}
-                      {(runId || (job.status === 'failed' && job.lastRun)) && <button className="sidebar-task-action" disabled={busyRun === (runId ?? job.lastRun?.id)} aria-label={(runId ? '取消' : '重试') + ' ' + job.name} title={runId ? '取消任务' : '重试任务'} onClick={() => void runAction(runId ?? job.lastRun!.id, job.name, runId ? 'cancel' : 'retry')}>{runId ? '×' : '↻'}</button>}
+                      {(runId || (job.status === 'failed' && job.lastRun)) && (
+                        <button
+                          className="sidebar-task-action"
+                          disabled={busyRun === (runId ?? job.lastRun?.id)}
+                          aria-label={(runId ? '取消' : job.lastRun?.type === 'faceRepair' ? '重跑' : '重试') + ' ' + job.name}
+                          title={runId ? '取消任务' : job.lastRun?.type === 'faceRepair' ? '面部重修不能单独重试，点击按当前配置重跑（rerun）' : '重试任务'}
+                          onClick={() => {
+                            if (runId) void runAction(runId, job.name, 'cancel');
+                            else if (job.lastRun?.type === 'faceRepair') void rerunJob(job.id, job.name, job.lastRun.id);
+                            else void runAction(job.lastRun!.id, job.name, 'retry');
+                          }}
+                        >
+                          {runId ? '×' : '↻'}
+                        </button>
+                      )}
                     </div>
                   );
                 })}
