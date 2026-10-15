@@ -456,6 +456,7 @@ export async function generateViaGrsai(opts: GenerateOptions): Promise<GenerateR
     const pollMs = grsaiPollIntervalMs();
     let lastProgress = -1;
     let pollFailures = 0;
+    let silentCodes = 0;
     for (;;) {
       if (combined.signal.aborted) throw combined.signal.reason;
       const remaining = deadline - Date.now();
@@ -473,9 +474,17 @@ export async function generateViaGrsai(opts: GenerateOptions): Promise<GenerateR
         continue;
       }
       if (r.status === 401 || r.status === 403) throw new MomoError('MOMO_API_KEY_INVALID', 'API Key 无效或过期', { status: r.status });
-      if (!r.json) continue;
+      if (!r.json) {
+        pollFailures++;
+        if (pollFailures % 10 === 1) logLine('warn', 'GrsAI 轮询返回非 JSON，继续等待', { ...opts.context, taskId, pollFailures });
+        continue;
+      }
       if (isGrsaiAuthError(r.json)) throw new MomoError('MOMO_API_KEY_INVALID', 'API Key 无效或过期', { status: r.status });
-      if (r.json.code !== undefined && r.json.code !== 0) continue; // 含 -22 任务不存在等瞬时状态，保持轮询
+      if (r.json.code !== undefined && r.json.code !== 0) {
+        silentCodes++;
+        if (silentCodes % 10 === 1) logLine('warn', `GrsAI 轮询返回 code=${r.json.code}（继续保持轮询）`, { ...opts.context, taskId, silentCodes });
+        continue;
+      }
 
       const data = r.json.data ?? {};
       const status = String(data.status ?? '').toLowerCase();
@@ -502,6 +511,14 @@ export async function generateViaGrsai(opts: GenerateOptions): Promise<GenerateR
     }
   } catch (e) {
     const err = opts.signal?.aborted ? new MomoError('CANCELED', '已停止本地等待；远端任务可能仍在运行，请核对远端记录') : toMomoError(combined.signal.aborted ? combined.signal.reason : e);
+    // 本地超时但远端可能已完成：用独立短预算做最后一次查询，取回结果（轮询丢失/静止时不白丢一张已出图）
+    if (err.code === 'MOMO_TIMEOUT' && taskId && !opts.signal?.aborted) {
+      const recovered = await recoverGrsaiResult(resultUrl, s, taskId, opts);
+      if (recovered) {
+        logLine('info', '超时后最后一次查询取回远端已完成的结果', { ...opts.context, taskId });
+        return recovered;
+      }
+    }
     if (err.code === 'MOMO_TIMEOUT' && taskId && !/任务 ID/.test(err.message)) {
       err.message = `等待超过 ${s.runTimeoutSec} 秒（远端任务 ID：${taskId}）；远端可能已完成或扣费，请先在 GrsAI 控制台日志核对后再重试`;
     }
@@ -511,6 +528,44 @@ export async function generateViaGrsai(opts: GenerateOptions): Promise<GenerateR
     throw err;
   } finally {
     combined.dispose();
+  }
+}
+
+/** 超时/中断后的一次性远端查询：独立短预算（不依赖已中止的等待信号），取回已完成结果或返回 null */
+async function recoverGrsaiResult(resultUrl: string, s: AppSettings, taskId: string, opts: GenerateOptions): Promise<GenerateResult | null> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(new Error('recover timeout')), 45000);
+  try {
+    const resp = await request(resultUrl, {
+      method: 'POST',
+      headers: { Authorization: authHeader(s), 'Content-Type': 'application/json', 'x-fxdesk-recover': '1' },
+      body: JSON.stringify({ id: taskId }),
+      signal: ctrl.signal,
+      headersTimeout: 30000,
+      bodyTimeout: 30000,
+    });
+    const text = await resp.body.text();
+    let json: GrsaiEnvelope<GrsaiTaskData> | null = null;
+    try {
+      json = JSON.parse(text) as GrsaiEnvelope<GrsaiTaskData>;
+    } catch {
+      json = null;
+    }
+    if (!json || (json.code !== undefined && json.code !== 0)) return null;
+    const data = json.data ?? {};
+    const status = String(data.status ?? '').toLowerCase();
+    if (status === 'failed') return null;
+    const b64 = data.results?.find((x) => x.b64_json)?.b64_json;
+    if (b64) return { mime: 'image/png', base64: b64, raw: data };
+    const url = data.results?.find((x) => x.url)?.url ?? data.url;
+    if (!url || !['succeeded', 'success', 'completed', 'done', ''].includes(status)) return null;
+    const img = await downloadGrsaiImage(url, ctrl.signal);
+    return { mime: img.mime, base64: img.base64, raw: data };
+  } catch (e) {
+    logLine('warn', '超时后的远端取回查询未成功', { ...opts.context, taskId, error: e instanceof Error ? e.message : String(e) });
+    return null;
+  } finally {
+    clearTimeout(t);
   }
 }
 

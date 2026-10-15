@@ -22,6 +22,7 @@ let mode: Mode = 'running-then-ok';
 let submits: Record<string, unknown>[] = [];
 let polls = 0;
 let resultCallsToSucceed = 2;
+let recoverFails = false;
 
 const readBody = (req: http.IncomingMessage, cb: (body: Record<string, unknown>) => void) => {
   let raw = '';
@@ -57,6 +58,11 @@ beforeAll(async () => {
       if (req.method === 'POST' && req.url === '/v1/draw/result') {
         if (!authed) return send(res, { code: -1, data: null, msg: 'apikey error' });
         if (body.id === TEST_TASK_ID) return send(res, { code: -22, data: null, msg: '任务不存在' });
+        // 恢复查询（带标记头）：默认返回已完成结果，用于验证「超时后最后一次取回」
+        if (req.headers['x-fxdesk-recover']) {
+          if (recoverFails) return send(res, { code: 0, msg: 'success', data: { id: 'task-1', status: 'running', progress: 30 } });
+          return send(res, { code: 0, msg: 'success', data: { id: 'task-1', status: 'succeeded', progress: 100, results: [{ url: `${baseUrl}/img.png` }] } });
+        }
         polls++;
         if (mode === 'moderation') {
           return send(res, { code: 0, msg: 'success', data: { id: 'task-1', status: 'failed', failure_reason: 'output_moderation', error: 'violence detected' } });
@@ -83,6 +89,7 @@ afterEach(() => {
   submits = [];
   polls = 0;
   resultCallsToSucceed = 2;
+  recoverFails = false;
 });
 
 afterAll(async () => {
@@ -148,8 +155,16 @@ describe('GrsAI 生成（仅访问本地假服务）', () => {
     expect(submits).toHaveLength(1);
   });
 
-  it('等待超时提示远端任务 ID，且不重复提交', async () => {
+  it('超时后最后一次查询取回远端已完成的结果（不白丢已出图）', async () => {
     mode = 'running-forever';
+    const r = await generateViaGrsai(options({ runTimeoutSec: 1 }));
+    expect(r.base64).toBe(PNG.toString('base64'));
+    expect(submits).toHaveLength(1);
+  });
+
+  it('取回查询也拿不到时，超时提示远端任务 ID，且不重复提交', async () => {
+    mode = 'running-forever';
+    recoverFails = true;
     await expect(generateViaGrsai(options({ runTimeoutSec: 1 }))).rejects.toMatchObject({ code: 'MOMO_TIMEOUT', message: expect.stringContaining('task-1') });
     expect(submits).toHaveLength(1);
   });
