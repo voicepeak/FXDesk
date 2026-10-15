@@ -210,6 +210,26 @@ export default function MaterialsPanel(props: Props) {
                 <span className={cls('chip', 'chip-mini', m.source === 'client' ? 'chip-amber' : m.source === 'web' ? 'chip-blue' : 'chip-green')}>
                   {m.source === 'client' ? '客户' : m.source === 'web' ? '网络' : '库'}
                 </span>
+                {m.blendPrompt && <span className="chip chip-mini chip-violet" title={`融入说明：${m.blendPrompt}`}>含融入说明</span>}
+                <select
+                  className="select material-role-select"
+                  value={m.role}
+                  title="用途标记（供 AI 筹备参考）"
+                  onChange={async (e) => {
+                    try {
+                      await api.setMaterialRole(props.jobId, m.id, e.target.value);
+                      props.onChanged();
+                    } catch (err) {
+                      toast(err instanceof Error ? err.message : String(err), 'error');
+                    }
+                  }}
+                >
+                  <option value="general">综合参考</option>
+                  <option value="analysis">角色补充参考</option>
+                  <option value="style">特效风格参照</option>
+                  <option value="item">物品参照</option>
+                  <option value="effect">特效素材</option>
+                </select>
               </div>
             </div>
             <div className="material-ops">

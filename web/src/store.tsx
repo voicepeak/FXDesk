@@ -24,6 +24,8 @@ interface Store {
   jobs: JobSummary[];
   queue: QueueSnapshot | null;
   libraryVersion: number;
+  prepVersion: number;
+  prepStage: { jobId: string; kind: string; stage: string } | null;
   toasts: Toast[];
   toast(message: string, kind?: Toast['kind']): void;
   dismissToast(id: number): void;
@@ -78,6 +80,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [queue, setQueue] = useState<QueueSnapshot | null>(null);
   const [libraryVersion, setLibraryVersion] = useState(0);
+  const [prepVersion, setPrepVersion] = useState(0);
+  const [prepStage, setPrepStage] = useState<{ jobId: string; kind: string; stage: string } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const prevStatus = useRef<Map<string, string>>(new Map());
   const jobsTimer = useRef<number | null>(null);
@@ -199,6 +203,29 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       }
     });
     es.addEventListener('lib_update', () => setLibraryVersion((v) => v + 1));
+    es.addEventListener('prep_update', (e) => {
+      try {
+        const p = JSON.parse((e as MessageEvent).data) as {
+          jobId: string;
+          kind: string;
+          status: string;
+          effectId?: string | null;
+          error?: string | null;
+          stage?: string | null;
+        };
+        setPrepVersion((v) => v + 1);
+        if (p.stage && p.status === 'running') setPrepStage({ jobId: p.jobId, kind: p.kind, stage: p.stage });
+        else if (p.status !== 'running') setPrepStage((cur) => (cur && cur.jobId === p.jobId && cur.kind === p.kind ? null : cur));
+        if (p.kind === 'effect' && p.status === 'failed' && p.error) toast(`特效预演失败：${p.error}`, 'error');
+        if (p.kind === 'analysis' && p.status === 'done') toast('角色识别完成，请在 AI 筹备中确认', 'success');
+        if (p.kind === 'analysis' && p.status === 'failed' && p.error) toast(`识别失败：${p.error}`, 'error');
+        if (p.kind === 'proposal' && p.status === 'done') toast('特效见解已生成，请查看并确认', 'success');
+        if (p.kind === 'proposal' && p.status === 'failed' && p.error) toast(`特效见解失败：${p.error}`, 'error');
+        scheduleJobsRefresh();
+      } catch {
+        /* ignore */
+      }
+    });
     es.onerror = () => {
       /* EventSource auto-reconnects */
     };
@@ -232,6 +259,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       jobs,
       queue,
       libraryVersion,
+      prepVersion,
+      prepStage,
       toasts,
       toast,
       dismissToast,
@@ -240,7 +269,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       refreshBalance,
       refreshQueue,
     }),
-    [route, navigate, settings, balance, balanceError, jobs, queue, libraryVersion, toasts, toast, dismissToast, refreshJobs, refreshSettings, refreshBalance, refreshQueue]
+    [route, navigate, settings, balance, balanceError, jobs, queue, libraryVersion, prepVersion, prepStage, toasts, toast, dismissToast, refreshJobs, refreshSettings, refreshBalance, refreshQueue]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

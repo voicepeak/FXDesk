@@ -41,6 +41,8 @@ export interface JobSummary {
   lastRun: { id: string; seq: number; type: string; status: string; elapsedMs: number | null; cost: number; error: string | null } | null;
 }
 
+export type MaterialRole = 'general' | 'analysis' | 'style' | 'item' | 'effect';
+
 export interface Material {
   id: string;
   source: 'client' | 'library' | 'web';
@@ -48,6 +50,8 @@ export interface Material {
   displayName: string;
   fileUrl: string | null;
   orderIndex: number;
+  role: MaterialRole;
+  blendPrompt: string;
 }
 
 export interface Region {
@@ -64,6 +68,24 @@ export interface QcIdentity {
   sim: number | null;
   reason?: string | null;
   afterRepair?: { sim: number | null; status: string } | null;
+  afterLock?: { sim: number | null; status: string } | null;
+}
+
+export interface QcFaceLock {
+  applied: boolean;
+  reason?: string;
+  simBefore?: number | null;
+  simAfter?: number | null;
+  pass?: boolean;
+  passThreshold?: number;
+  simMethod?: 'aligned' | 'detected';
+  runId?: string;
+  path?: string;
+  angleDeg?: number;
+  scale?: number;
+  alignResidual?: number;
+  lightMatch?: boolean;
+  elapsedMs?: number;
 }
 
 export interface QcResult {
@@ -71,6 +93,7 @@ export interface QcResult {
   composition: { ssim: number; phashDistance: number; verdict: 'ok' | 'shifted' } | null;
   elements: { confirmed: { label: string; checked: boolean }[] };
   faceRepair?: { triggered: boolean; runId?: string; status?: string; error?: string } | null;
+  faceLock?: QcFaceLock | null;
 }
 
 export interface UpscaleInfo {
@@ -118,6 +141,7 @@ export interface JobDetail {
     name: string;
     status: JobStatus;
     character: string;
+    brief: string;
     globalInstruction: string;
     originalUrl: string;
     finalRunId: string | null;
@@ -139,7 +163,7 @@ export interface JobDetail {
 
 export interface LibraryItem {
   id: string;
-  type: 'plate' | 'ref' | 'history';
+  type: 'plate' | 'ref' | 'history' | 'effect';
   jobId: string | null;
   title: string;
   fileUrl: string;
@@ -151,7 +175,63 @@ export interface LibraryItem {
   width: number | null;
   height: number | null;
   background: string | null;
+  prompt: string;
+  blendPrompt: string;
   createdAt: number;
+}
+
+export type PrepTaskStatus = 'idle' | 'running' | 'done' | 'failed';
+
+export interface AnalysisResult {
+  character: string;
+  work: string;
+  aliases: string[];
+  scene: string;
+  confidence: number | null;
+  notes: string;
+}
+
+export type EffectKind = 'light' | 'prop' | 'background' | 'other';
+export type EffectStatus = 'ready' | 'queued' | 'generating' | 'review' | 'failed' | 'approved';
+
+export interface PrepEffect {
+  id: string;
+  seq: number;
+  title: string;
+  kind: EffectKind;
+  genPrompt: string;
+  blendPrompt: string;
+  refMaterialIds: string[];
+  status: EffectStatus;
+  runId: string | null;
+  imageUrl: string | null;
+  error: string | null;
+  libraryItemId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface JobPrepInfo {
+  analysis: {
+    status: PrepTaskStatus;
+    result: AnalysisResult | null;
+    error: string | null;
+    confirmedAt: number | null;
+    startedAt: number | null;
+    finishedAt: number | null;
+  };
+  proposal: {
+    status: PrepTaskStatus;
+    result: { summary: string; effects: unknown[] } | null;
+    error: string | null;
+    startedAt: number | null;
+    finishedAt: number | null;
+  };
+}
+
+export interface PrepData {
+  prep: JobPrepInfo;
+  effects: PrepEffect[];
 }
 
 export interface Settings {
@@ -169,6 +249,8 @@ export interface Settings {
   qcIdentityPass: number;
   qcIdentityMid: number;
   qcAutoFaceRepair: boolean;
+  qcFaceLock: boolean;
+  qcFaceLockPass: number;
   tplSystem: string;
   tplRegion: string;
   tplGlobal: string;
@@ -176,6 +258,21 @@ export interface Settings {
   tplFaceRepair: string;
   tplRepair: string;
   tplPlate: string;
+  tplAnalyze: string;
+  tplPropose: string;
+  tplEffectSystem: string;
+  tplBlend: string;
+  analysisProtocol: 'auto' | 'openai' | 'gemini' | 'doubao-web';
+  analysisDisableThinking: boolean;
+  analysisBaseUrl: string;
+  analysisApiKey: string;
+  analysisModelId: string;
+  effectProtocol: 'auto' | 'momo' | 'grsai';
+  effectBaseUrl: string;
+  effectApiKey: string;
+  effectModelId: string;
+  prepHouseRules: string;
+  analysisTimeoutSec: number;
   sendMaxDimension: number;
   upscaleEngine: 'realesrgan' | 'lanczos';
   upscaleTimeoutSec: number;
@@ -186,8 +283,8 @@ export interface Settings {
 
 export interface QueueSnapshot {
   concurrency: number;
-  pending: { jobId: string; runId: string; name: string; thumb: string | null; position: number }[];
-  active: { jobId: string; runId: string; name: string; thumb: string | null; stage: string; elapsed: number; cost: number; startedAt: number; attempt?: number; message?: string; retryAt?: number; timeoutSec?: number; imageSize?: string }[];
+  pending: { jobId: string; runId: string; name: string; runType?: string; thumb: string | null; position: number }[];
+  active: { jobId: string; runId: string; name: string; runType?: string; thumb: string | null; stage: string; elapsed: number; cost: number; startedAt: number; attempt?: number; message?: string; retryAt?: number; timeoutSec?: number; imageSize?: string }[];
   todayCost: number;
   monthlyCost: number;
   mock: boolean;

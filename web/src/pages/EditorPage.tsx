@@ -6,6 +6,7 @@ import MaterialsPanel from '../editor/MaterialsPanel';
 import PromptPanel from '../editor/PromptPanel';
 import GenerationStatus from '../components/GenerationStatus';
 import ResultLocationButton from '../components/ResultLocationButton';
+import PrepModal from '../components/PrepModal';
 import { StatusBadge } from './JobsPage';
 import { cls, paletteColor } from '../util';
 import type { Bbox, JobDetail, Region, SelectionTool } from '../types';
@@ -21,6 +22,7 @@ export default function EditorPage({ jobId }: { jobId: string }) {
   const [genBusy, setGenBusy] = useState(false);
   const [saved, setSaved] = useState(true);
   const [nameDraft, setNameDraft] = useState('');
+  const [showPrep, setShowPrep] = useState(false);
   const regionTimer = useRef<number | null>(null);
   const globalTimer = useRef<number | null>(null);
 
@@ -230,6 +232,9 @@ export default function EditorPage({ jobId }: { jobId: string }) {
           <span className="muted" style={{ fontSize: 11.5 }}>
             {saved ? '已保存' : '保存中…'}
           </span>
+          <button className="btn btn-sm" onClick={() => setShowPrep(true)} title="识别角色 → 选参考 → 特效见解 → 特效预演 → 入库">
+            ✨ AI 筹备
+          </button>
           <div className="spacer" />
           <button className={cls('tool-btn', tool === 'select' && 'active')} onClick={() => setTool('select')} title="快捷键 V">
             ⬚ 选择
@@ -284,6 +289,18 @@ export default function EditorPage({ jobId }: { jobId: string }) {
           genBusy={genBusy}
         />
       </div>
+      {showPrep && (
+        <PrepModal
+          jobId={jobId}
+          onClose={() => setShowPrep(false)}
+          onChanged={() => {
+            void api.job(jobId).then((d) => {
+              setDetail((prev) => (prev ? { ...prev, materials: d.materials, job: d.job } : d));
+              setPreview(d.preview);
+            }).catch(() => undefined);
+          }}
+        />
+      )}
     </div>
   );
 }

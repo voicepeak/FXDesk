@@ -1,4 +1,4 @@
-import type { BalanceInfo, Bbox, JobDetail, JobSummary, LibraryItem, QueueSnapshot, RefToken, Region, Settings } from './types';
+import type { AnalysisResult, BalanceInfo, Bbox, EffectKind, JobDetail, JobSummary, LibraryItem, PrepData, PrepEffect, QueueSnapshot, RefToken, Region, Settings } from './types';
 
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) {
@@ -57,7 +57,7 @@ export const api = {
     fd.append('original', file);
     return fetch(`/api/jobs/${id}/original`, { method: 'POST', body: fd }).then((r) => j<{ ok: boolean }>(r));
   },
-  patchJob: (id: string, patch: { name?: string; character?: string; global_instruction?: string }) =>
+  patchJob: (id: string, patch: { name?: string; character?: string; global_instruction?: string; brief?: string }) =>
     fetch(`/api/jobs/${id}`, jsonInit('PATCH', patch)).then((r) => j<{ ok: boolean }>(r)),
   deleteJob: (id: string) => fetch(`/api/jobs/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   cloneJob: (id: string) => fetch(`/api/jobs/${id}/clone`, jsonInit('POST', {})).then((r) => j<{ id: string; name: string }>(r)),
@@ -67,10 +67,12 @@ export const api = {
     fd.append('file', file);
     return fetch(`/api/jobs/${jobId}/materials`, { method: 'POST', body: fd }).then((r) => j<{ id: string; orderIndex: number; warning?: string | null }>(r));
   },
-  addMaterialLibrary: (jobId: string, libraryItemId: string, displayName?: string) =>
-    fetch(`/api/jobs/${jobId}/materials`, jsonInit('POST', { libraryItemId, displayName })).then((r) => j<{ id: string; orderIndex: number; warning?: string | null }>(r)),
+  addMaterialLibrary: (jobId: string, libraryItemId: string, displayName?: string, role?: string) =>
+    fetch(`/api/jobs/${jobId}/materials`, jsonInit('POST', { libraryItemId, displayName, role })).then((r) => j<{ id: string; orderIndex: number; warning?: string | null }>(r)),
   renameMaterial: (jobId: string, mid: string, displayName: string) =>
     fetch(`/api/jobs/${jobId}/materials/${mid}`, jsonInit('PATCH', { displayName })).then((r) => j<{ ok: boolean }>(r)),
+  setMaterialRole: (jobId: string, mid: string, role: string) =>
+    fetch(`/api/jobs/${jobId}/materials/${mid}`, jsonInit('PATCH', { role })).then((r) => j<{ ok: boolean }>(r)),
   deleteMaterial: (jobId: string, mid: string) =>
     fetch(`/api/jobs/${jobId}/materials/${mid}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean; message?: string }>(r)),
   reorderMaterials: (jobId: string, ids: string[]) =>
@@ -102,7 +104,7 @@ export const api = {
     return fetch(`/api/library/items?${qs.toString()}`).then((r) => j<{ available: LibraryItem[]; history: LibraryItem[]; items: LibraryItem[] }>(r));
   },
   favoriteItem: (id: string, favorite: boolean) => fetch(`/api/library/items/${id}/favorite`, jsonInit('POST', { favorite })).then((r) => j<{ ok: boolean }>(r)),
-  patchItem: (id: string, patch: { title?: string; tags?: string[]; status?: string }) => fetch(`/api/library/items/${id}`, jsonInit('PATCH', patch)).then((r) => j<{ ok: boolean }>(r)),
+  patchItem: (id: string, patch: { title?: string; tags?: string[]; status?: string; prompt?: string; blendPrompt?: string }) => fetch(`/api/library/items/${id}`, jsonInit('PATCH', patch)).then((r) => j<{ ok: boolean }>(r)),
   deleteItem: (id: string) => fetch(`/api/library/items/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   importLibraryItem: (file: File, title: string, type: 'ref' | 'plate', tags: string[]) => {
     const fd = new FormData();
@@ -118,9 +120,29 @@ export const api = {
   refSearchStatus: () => fetch('/api/refsearch/status').then((r) => j<RefSearchStatus>(r)),
   refSearchLogin: () => fetch('/api/refsearch/login', jsonInit('POST', {})).then((r) => j<{ started: boolean; message: string }>(r)),
   refSearchSearch: (keyword: string, limit?: number) => fetch('/api/refsearch/search', jsonInit('POST', { keyword, limit })).then((r) => j<{ source: string; items: RefSearchItem[] }>(r)),
-  refSearchImport: (jobId: string, imageUrl: string, title: string) =>
-    fetch('/api/refsearch/import', jsonInit('POST', { jobId, imageUrl, title })).then((r) => j<{ id: string; orderIndex: number; displayName: string; warning?: string | null }>(r)),
+  refSearchImport: (jobId: string, imageUrl: string, title: string, role?: string) =>
+    fetch('/api/refsearch/import', jsonInit('POST', { jobId, imageUrl, title, role })).then((r) => j<{ id: string; orderIndex: number; displayName: string; warning?: string | null }>(r)),
   refSearchThumb: (u: string) => `/api/refsearch/thumb?u=${encodeURIComponent(u)}`,
+
+  doubaoStatus: () =>
+    fetch('/api/doubao/status').then((r) => j<{ browserInstalled: boolean; profileExists: boolean; loginState: 'idle' | 'waiting' | 'done' | 'error'; loginError: string }>(r)),
+  doubaoLogin: () => fetch('/api/doubao/login', jsonInit('POST', {})).then((r) => j<{ started: boolean; message: string }>(r)),
+
+  prep: (jobId: string) => fetch(`/api/jobs/${jobId}/prep`).then((r) => j<PrepData>(r)),
+  prepAnalyze: (jobId: string) => fetch(`/api/jobs/${jobId}/prep/analyze`, jsonInit('POST', {})).then((r) => j<{ ok: boolean; status: string }>(r)),
+  prepSaveAnalysis: (jobId: string, analysis: Partial<AnalysisResult>) =>
+    fetch(`/api/jobs/${jobId}/prep/analysis`, jsonInit('PUT', analysis)).then((r) => j<{ ok: boolean; analysis: AnalysisResult }>(r)),
+  prepPropose: (jobId: string) => fetch(`/api/jobs/${jobId}/prep/propose`, jsonInit('POST', {})).then((r) => j<{ ok: boolean; status: string }>(r)),
+  prepAddEffect: (jobId: string, effect: { title?: string; kind?: EffectKind; genPrompt?: string; blendPrompt?: string }) =>
+    fetch(`/api/jobs/${jobId}/prep/effects`, jsonInit('POST', effect)).then((r) => j<{ ok: boolean; effect: PrepEffect }>(r)),
+  prepUpdateEffect: (jobId: string, effectId: string, patch: Partial<Pick<PrepEffect, 'title' | 'kind' | 'genPrompt' | 'blendPrompt' | 'refMaterialIds'>>) =>
+    fetch(`/api/jobs/${jobId}/prep/effects/${effectId}`, jsonInit('PUT', patch)).then((r) => j<{ ok: boolean; effect: PrepEffect }>(r)),
+  prepDeleteEffect: (jobId: string, effectId: string) =>
+    fetch(`/api/jobs/${jobId}/prep/effects/${effectId}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
+  prepGenerateEffect: (jobId: string, effectId: string) =>
+    fetch(`/api/jobs/${jobId}/prep/effects/${effectId}/generate`, jsonInit('POST', {})).then((r) => j<{ runId: string; seq: number }>(r)),
+  prepApproveEffect: (jobId: string, effectId: string) =>
+    fetch(`/api/jobs/${jobId}/prep/effects/${effectId}/approve`, jsonInit('POST', {})).then((r) => j<{ ok: boolean; itemId: string; refNo: number; title: string }>(r)),
 
   settings: () => fetch('/api/settings').then((r) => j<Settings>(r)),
   saveSettings: (patch: Partial<Settings>) => fetch('/api/settings', jsonInit('PUT', patch)).then((r) => j<Settings>(r)),

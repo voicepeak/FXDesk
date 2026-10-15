@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
 import { fmtCost } from '../util';
@@ -9,6 +9,8 @@ const PLACEHOLDER_HINTS: Partial<Record<keyof Settings, string>> = {
   tplGlobal: '必须保留占位符：{{globalInstruction}}',
   tplRepair: '必须保留占位符：{{color}} {{n}} {{location}} {{repairInstruction}}',
   tplPlate: '必须保留占位符：{{effectDescription}}',
+  tplPropose: '必须保留占位符：{{analysis}} {{brief}} {{houseRules}} {{refs}}',
+  tplBlend: '必须保留占位符：{{refNo}} {{blendPrompt}}',
 };
 
 const TEMPLATE_FIELDS: { key: keyof Settings; label: string }[] = [
@@ -19,6 +21,10 @@ const TEMPLATE_FIELDS: { key: keyof Settings; label: string }[] = [
   { key: 'tplFaceRepair', label: '面部重修指令' },
   { key: 'tplRepair', label: '定点重修指令' },
   { key: 'tplPlate', label: '净版提取指令' },
+  { key: 'tplAnalyze', label: 'AI筹备·角色识别提示词' },
+  { key: 'tplPropose', label: 'AI筹备·特效见解提示词' },
+  { key: 'tplEffectSystem', label: 'AI筹备·特效预演系统词' },
+  { key: 'tplBlend', label: 'AI筹备·融入说明注入模板' },
 ];
 
 const MOMO_MODEL_PRESETS = ['[Mo]nano-banana-pro', '[yu]gemini-nano-banana-2.1', 'gpt-image-2.5-sunburst'];
@@ -33,11 +39,14 @@ const GRSAI_MODEL_PRESETS = [
   'nano-banana-fast',
   'gpt-image-2',
 ];
+const ANALYSIS_MODEL_PRESETS = ['doubao-seed-1.6', 'doubao-1.5-vision-pro', 'doubao-vision-pro-32k', 'doubao-1.5-vision-lite'];
 
 export default function SettingsPage() {
   const { settings, refreshSettings, toast, refreshBalance, balance, balanceError } = useStore();
   const [form, setForm] = useState<Settings | null>(null);
   const [keyDraft, setKeyDraft] = useState('');
+  const [analysisKeyDraft, setAnalysisKeyDraft] = useState('');
+  const [effectKeyDraft, setEffectKeyDraft] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
@@ -47,6 +56,8 @@ export default function SettingsPage() {
     if (settings) {
       setForm({ ...settings });
       setKeyDraft(settings.apiKey ? 'obf:***' : '');
+      setAnalysisKeyDraft(settings.analysisApiKey ? 'obf:***' : '');
+      setEffectKeyDraft(settings.effectApiKey ? 'obf:***' : '');
     }
   }, [settings]);
 
@@ -65,6 +76,10 @@ export default function SettingsPage() {
       const patch: Partial<Settings> = { ...form };
       if (keyDraft === 'obf:***') delete patch.apiKey;
       else patch.apiKey = keyDraft;
+      if (analysisKeyDraft === 'obf:***') delete patch.analysisApiKey;
+      else patch.analysisApiKey = analysisKeyDraft;
+      if (effectKeyDraft === 'obf:***') delete patch.effectApiKey;
+      else patch.effectApiKey = effectKeyDraft;
       await api.saveSettings(patch);
       await refreshSettings();
       setSaveMsg({ kind: 'ok', text: '已保存' });
@@ -73,6 +88,16 @@ export default function SettingsPage() {
       setSaveMsg({ kind: 'err', text: e instanceof Error ? e.message : String(e) });
     } finally {
       setSaving(false);
+    }
+  };
+
+  /** 服务商协议切换立即持久化（避免“选了但没点保存”导致仍走旧通道） */
+  const persistProtocol = async (field: 'analysisProtocol' | 'effectProtocol', value: string) => {
+    set(field, value as never);
+    try {
+      await api.saveSettings({ [field]: value } as Partial<Settings>);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error');
     }
   };
 
@@ -117,7 +142,7 @@ export default function SettingsPage() {
               </select>
             </div>
             <div className="form-row">
-              <label className="label">模型 ID</label>
+              <label className="label">模型 ID（最终合成）</label>
               <input className="input" value={form.modelId} onChange={(e) => set('modelId', e.target.value)} list="model-list" />
               <datalist id="model-list">
                 {modelPresets.map((m) => (
@@ -166,6 +191,111 @@ export default function SettingsPage() {
         </div>
 
         <details className="settings-group" open>
+          <summary>AI 筹备（识别 → 特效预演）</summary>
+          <p className="form-hint">
+            识别/见解走多模态分析，特效预演走图像生成。两个服务商可独立配置（Base URL / API Key / 模型 / 协议），
+            <strong>留空则沿用上方「连接与生成」的对应字段</strong>。
+          </p>
+
+          <div className="settings-subblock">
+            <div className="settings-subhead">分析服务商（角色识别 + 特效见解，如豆包视觉）</div>
+            <div className="settings-cols">
+              <div className="form-row">
+                <label className="label">协议（切换后立即生效，无需另点保存）</label>
+                <select className="select" value={form.analysisProtocol} onChange={(e) => void persistProtocol('analysisProtocol', e.target.value)}>
+                  <option value="auto">自动识别（按服务商/协议依次尝试）</option>
+                  <option value="openai">OpenAI 兼容（/v1/chat/completions）</option>
+                  <option value="gemini">Gemini 兼容（:generateContent）</option>
+                  <option value="doubao-web">豆包网页版（浏览器自动化，走网页版识别）</option>
+                </select>
+                {form.analysisProtocol === 'doubao-web' && <DoubaoLoginPanel />}
+              </div>
+              <div className="form-row">
+                <label className="label">关闭思考模式（豆包思考模型大幅提速）</label>
+                <label className="element-row" style={{ width: 'fit-content' }}>
+                  <input
+                    type="checkbox"
+                    checked={form.analysisDisableThinking}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      set('analysisDisableThinking', v);
+                      void api.saveSettings({ analysisDisableThinking: v }).catch((err) => toast(err instanceof Error ? err.message : String(err), 'error'));
+                    }}
+                  />
+                  发送 thinking: disabled（切换后立即生效；中转站不支持时会自动去掉该参数重试）
+                </label>
+                <div className="form-hint">豆包 Seed 系默认先输出思维链：识别慢且可能把输出预算耗光。开启后实测大幅提速（图问答 15 秒 → 3~5 秒）。</div>
+              </div>
+              <div className="form-row">
+                <label className="label">Base URL（留空沿用上方）</label>
+                <input className="input" value={form.analysisBaseUrl} onChange={(e) => set('analysisBaseUrl', e.target.value)} placeholder={form.baseUrl || 'https://…'} />
+              </div>
+              <div className="form-row">
+                <label className="label">API Key（留空沿用上方）</label>
+                <input className="input" type="password" value={analysisKeyDraft} onChange={(e) => setAnalysisKeyDraft(e.target.value)} placeholder="专用 Key（本机混淆存储）" />
+              </div>
+              <div className="form-row">
+                <label className="label">模型 ID</label>
+                <input className="input" value={form.analysisModelId} onChange={(e) => set('analysisModelId', e.target.value)} list="analysis-model-list" />
+                <datalist id="analysis-model-list">
+                  {ANALYSIS_MODEL_PRESETS.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="form-row">
+                <label className="label">等待上限（秒）</label>
+                <input className="input" type="number" min={30} max={900} value={form.analysisTimeoutSec} onChange={(e) => set('analysisTimeoutSec', Number(e.target.value))} />
+              </div>
+            </div>
+          </div>
+
+          <div className="settings-subblock">
+            <div className="settings-subhead">特效服务商（1K 预演草图，如 image2.5 / gpt-image 系）</div>
+            <div className="settings-cols">
+              <div className="form-row">
+                <label className="label">协议（切换后立即生效，无需另点保存）</label>
+                <select className="select" value={form.effectProtocol} onChange={(e) => void persistProtocol('effectProtocol', e.target.value)}>
+                  <option value="auto">自动识别（按 Base URL）</option>
+                  <option value="grsai">GrsAI 系（/v1/draw/*）</option>
+                  <option value="momo">墨墨/Gemini 兼容（:generateContent）</option>
+                </select>
+              </div>
+              <div className="form-row">
+                <label className="label">Base URL（留空沿用上方）</label>
+                <input className="input" value={form.effectBaseUrl} onChange={(e) => set('effectBaseUrl', e.target.value)} placeholder={form.baseUrl || 'https://…'} />
+              </div>
+              <div className="form-row">
+                <label className="label">API Key（留空沿用上方）</label>
+                <input className="input" type="password" value={effectKeyDraft} onChange={(e) => setEffectKeyDraft(e.target.value)} placeholder="专用 Key（本机混淆存储）" />
+              </div>
+              <div className="form-row">
+                <label className="label">模型 ID</label>
+                <input className="input" value={form.effectModelId} onChange={(e) => set('effectModelId', e.target.value)} list="effect-model-list" />
+                <datalist id="effect-model-list">
+                  {['gpt-image-2.5-sunburst', 'gpt-image-2', 'nano-banana-pro'].map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+                <div className="form-hint">生成 1K 级特效预演图；后续交付合成会超分回原图分辨率。</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="form-row">
+            <label className="label">工作室要求（注入特效见解）</label>
+            <textarea
+              className="textarea"
+              rows={3}
+              placeholder="例：保持真实光影与材质质感；特效不要覆盖人物面部；风格偏电影感，不要过饱和"
+              value={form.prepHouseRules}
+              onChange={(e) => set('prepHouseRules', e.target.value)}
+            />
+            <div className="form-hint">每笔客单生成特效见解时会与客户要求一起交给分析模型。</div>
+          </div>
+        </details>
+
+        <details className="settings-group" open>
           <summary>队列、通知与质检</summary>
           <div className="settings-cols">
             <div className="form-row">
@@ -206,6 +336,19 @@ export default function SettingsPage() {
                 <input type="checkbox" checked={form.qcAutoFaceRepair} onChange={(e) => set('qcAutoFaceRepair', e.target.checked)} />
                 中分时自动重修 1 次
               </label>
+            </div>
+            <div className="form-row">
+              <label className="label">锁脸（复制图层，最后一步）</label>
+              <label className="element-row" style={{ width: 'fit-content' }}>
+                <input type="checkbox" checked={form.qcFaceLock} onChange={(e) => set('qcFaceLock', e.target.checked)} />
+                交付前把原图脸区对齐贴回（宽羽化 + 光照匹配）
+              </label>
+              <div className="form-hint">无论是否做过面部重修都会执行；用原图全分辨率像素锁住身份，复检相似度以硬门槛判定。</div>
+            </div>
+            <div className="form-row">
+              <label className="label">锁脸硬门槛（复检 ≥ 通过）</label>
+              <input className="input" type="number" step="0.01" min={0.5} max={1} value={form.qcFaceLockPass} onChange={(e) => set('qcFaceLockPass', Number(e.target.value))} />
+              <div className="form-hint">默认 0.95；锁脸后复检低于该值标记为未达标转人工（结果仍保留锁脸图）。</div>
             </div>
             <div className="form-row">
               <label className="label">素材发送长边上限（px）</label>
@@ -277,6 +420,85 @@ export default function SettingsPage() {
           </button>
           {saveMsg && <span className={saveMsg.kind === 'ok' ? 'settings-msg ok' : 'settings-msg err'}>{saveMsg.text}</span>}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function DoubaoLoginPanel() {
+  const { toast } = useStore();
+  const [st, setSt] = useState<{ browserInstalled: boolean; loginState: string; loginError: string } | null>(null);
+  const prev = useRef<string>('idle');
+
+  const refresh = useCallback(
+    async (notify: boolean) => {
+      try {
+        const s = await api.doubaoStatus();
+        if (notify && s.loginState === 'done' && prev.current === 'waiting') toast('豆包登录成功', 'success');
+        if (notify && s.loginState === 'error' && prev.current === 'waiting') toast(s.loginError || '登录未完成，可重试', 'error');
+        prev.current = s.loginState;
+        setSt(s);
+      } catch {
+        /* 状态查询失败不打断设置页 */
+      }
+    },
+    [toast]
+  );
+
+  useEffect(() => {
+    void refresh(false);
+  }, [refresh]);
+
+  useEffect(() => {
+    if (st?.loginState !== 'waiting') return;
+    const t = window.setInterval(() => void refresh(true), 2500);
+    return () => window.clearInterval(t);
+  }, [st?.loginState, refresh]);
+
+  const startLogin = async () => {
+    try {
+      const r = await api.doubaoLogin();
+      toast(r.message, 'info');
+      prev.current = 'waiting';
+      setSt((s) => (s ? { ...s, loginState: 'waiting' } : s));
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error');
+    }
+  };
+
+  return (
+    <div className="settings-subblock" style={{ marginTop: 8 }}>
+      <div className="settings-subhead">豆包网页版登录</div>
+      <div className="form-hint" style={{ marginBottom: 8 }}>
+        走网页版识别（浏览器自动化，与小红书方案相同）：能力与速度以网页版为准；自动化有账号风控风险，建议保持人工节奏、勿高并发。
+        识别/见解会在<strong>屏幕外的后台浏览器</strong>中执行（不打扰操作），仅登录这一步需要弹窗扫码。
+        {st !== null && !st.browserInstalled && (
+          <>
+            {' '}
+            浏览器组件未安装：请先运行 <code>npx playwright install chromium</code>。
+          </>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button
+          className="btn btn-sm"
+          disabled={st?.loginState === 'waiting' || (st !== null && !st.browserInstalled)}
+          onClick={() => void startLogin()}
+        >
+          {st?.loginState === 'waiting' ? '等待扫码…' : st?.loginState === 'done' ? '重新登录' : '扫码登录'}
+        </button>
+        <span
+          className={st?.loginState === 'done' ? 'settings-msg ok' : st?.loginState === 'error' ? 'settings-msg err' : 'muted'}
+          style={{ fontSize: 12 }}
+        >
+          {st?.loginState === 'done'
+            ? '已登录'
+            : st?.loginState === 'waiting'
+              ? '已打开登录窗口，请在浏览器中扫码'
+              : st?.loginState === 'error'
+                ? st.loginError || '登录未完成，可重试'
+                : '未登录（首次使用前需扫码一次）'}
+        </span>
       </div>
     </div>
   );

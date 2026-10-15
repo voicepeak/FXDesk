@@ -30,6 +30,7 @@ export default function RefSearchModal(props: Props) {
   const [preview, setPreview] = useState<RefSearchItem | null>(null);
   const [importing, setImporting] = useState(false);
   const [importedIds, setImportedIds] = useState<Set<string>>(new Set());
+  const [importRole, setImportRole] = useState<'style' | 'item' | 'analysis' | 'general'>('style');
   const prevLoginState = useRef<string>('idle');
 
   const refreshStatus = useCallback(async (notify: boolean) => {
@@ -107,7 +108,7 @@ export default function RefSearchModal(props: Props) {
     if (!target || importing) return;
     setImporting(true);
     try {
-      const r = await api.refSearchImport(props.jobId, target.thumbUrl, target.title);
+      const r = await api.refSearchImport(props.jobId, target.thumbUrl, target.title, importRole);
       const importedId = target.id;
       setImportedIds((prev) => new Set(prev).add(importedId));
       toast(`已加入「${r.displayName}」（参考图${r.orderIndex}）`, 'success');
@@ -149,6 +150,16 @@ export default function RefSearchModal(props: Props) {
       )}
       {loginWaiting && <div className="refsearch-notice">已打开登录窗口：请在弹出的浏览器中扫码；登录成功后窗口会自动关闭</div>}
       {status?.loginState === 'error' && status.loginError && <div className="refsearch-notice">{status.loginError}</div>}
+      <div className="refsearch-rolebar">
+        <span className="muted">加入用途：</span>
+        <select className="select" style={{ width: 150, padding: '4px 8px', fontSize: 12 }} value={importRole} onChange={(e) => setImportRole(e.target.value as typeof importRole)}>
+          <option value="style">特效风格参照</option>
+          <option value="item">物品参照</option>
+          <option value="analysis">角色补充参考</option>
+          <option value="general">综合参考</option>
+        </select>
+        <span className="muted" style={{ fontSize: 11 }}>用途会写入参考图，供 AI 筹备识别与生成使用</span>
+      </div>
       {error && <div className="refsearch-error">{error}</div>}
       {searching && items.length === 0 && <div className="empty-hint">正在搜索小红书，首次约需 5–15 秒…</div>}
       {!searching && items.length === 0 && !error && <div className="empty-hint">输入关键词后点击搜索。结果仅作参考图使用，请注意原作者版权。</div>}

@@ -34,7 +34,7 @@ export default function LibraryPicker(props: { onPick: (item: LibraryItem) => vo
             <img src={it.fileUrl} className="picker-thumb" alt="" />
             <div className="picker-name">{it.title}</div>
             <div className="picker-tags">
-              <span className={cls('chip', 'chip-mini', it.type === 'plate' ? 'chip-blue' : 'chip-green')}>{it.type === 'plate' ? '净版' : '参考'}</span>
+              <span className={cls('chip', 'chip-mini', it.type === 'plate' ? 'chip-blue' : it.type === 'effect' ? 'chip-violet' : 'chip-green')}>{it.type === 'plate' ? '净版' : it.type === 'effect' ? '特效' : '参考'}</span>
               {it.tags.slice(0, 2).map((t) => (
                 <span key={t} className="chip chip-mini">
                   {t}

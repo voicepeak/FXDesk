@@ -107,7 +107,7 @@ export default function PromptPanel(props: Props) {
                     <option value="">＋ 插入参考图</option>
                     {props.materials.map((m) => (
                       <option key={m.id} value={m.id}>
-                        参考图{m.orderIndex}：{m.displayName}
+                        参考图{m.orderIndex}：{m.displayName}{m.blendPrompt ? '（含融入说明）' : ''}
                       </option>
                     ))}
                   </select>
@@ -125,6 +125,11 @@ export default function PromptPanel(props: Props) {
                     </span>
                   ))}
                 </div>
+                {r.refTokens.some((t) => props.materials.find((m) => m.id === t.materialId)?.blendPrompt) && (
+                  <div className="region-location" style={{ marginTop: 4 }}>
+                    已引用含融入说明的素材，最终提示词会自动附加「融入要求」
+                  </div>
+                )}
                 {!r.instruction.trim() && <div className="gen-reason">指令为空：生成前必须填写</div>}
               </div>
             </div>

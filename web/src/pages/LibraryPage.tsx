@@ -152,7 +152,7 @@ export default function LibraryPage() {
                   {it.title}
                 </div>
                 <div className="lib-card-meta">
-                  <span className={cls('chip', 'chip-mini', it.type === 'plate' ? 'chip-blue' : 'chip-green')}>{it.type === 'plate' ? '净版' : '参考'}</span>
+                  <span className={cls('chip', 'chip-mini', it.type === 'plate' ? 'chip-blue' : it.type === 'effect' ? 'chip-violet' : 'chip-green')}>{it.type === 'plate' ? '净版' : it.type === 'effect' ? '特效' : '参考'}</span>
                   {it.status === 'candidate' && <span className="chip chip-mini chip-amber">待整理</span>}
                   {it.tags.slice(0, 2).map((t) => (
                     <span className="chip chip-mini" key={t}>
@@ -227,7 +227,7 @@ export default function LibraryPage() {
                   <div className="lib-card-body">
                     <div className="lib-card-title">{it.title}</div>
                     <div className="lib-card-meta">
-                      <span className={cls('chip', 'chip-mini', it.type === 'plate' ? 'chip-blue' : 'chip-green')}>{it.type === 'plate' ? '净版' : '参考'}</span>
+                      <span className={cls('chip', 'chip-mini', it.type === 'plate' ? 'chip-blue' : it.type === 'effect' ? 'chip-violet' : 'chip-green')}>{it.type === 'plate' ? '净版' : it.type === 'effect' ? '特效' : '参考'}</span>
                       {it.tags.slice(0, 3).map((t) => (
                         <span className="chip chip-mini" key={t}>
                           {t}
@@ -345,10 +345,16 @@ function EditItemModal({ item, onClose, onDone }: { item: LibraryItem; onClose: 
   const { toast } = useStore();
   const [title, setTitle] = useState(item.title);
   const [tags, setTags] = useState(item.tags.join(', '));
+  const [genPrompt, setGenPrompt] = useState(item.prompt ?? '');
+  const [blendPrompt, setBlendPrompt] = useState(item.blendPrompt ?? '');
 
   const save = async () => {
     try {
-      await api.patchItem(item.id, { title, tags: tags.split(/[,，、]+/).map((t) => t.trim()).filter(Boolean) });
+      await api.patchItem(item.id, {
+        title,
+        tags: tags.split(/[,，、]+/).map((t) => t.trim()).filter(Boolean),
+        ...(item.type === 'effect' ? { prompt: genPrompt, blendPrompt } : {}),
+      });
       toast('已保存');
       onDone();
     } catch (e) {
@@ -363,7 +369,7 @@ function EditItemModal({ item, onClose, onDone }: { item: LibraryItem; onClose: 
         <div style={{ flex: 1 }}>
           <div className="kv-row">
             <span>类型</span>
-            <span className="kv-val">{item.type === 'plate' ? '净版' : item.type === 'history' ? '历史成果' : '参考素材'}</span>
+            <span className="kv-val">{item.type === 'plate' ? '净版' : item.type === 'effect' ? '特效预演' : item.type === 'history' ? '历史成果' : '参考素材'}</span>
           </div>
           <div className="kv-row">
             <span>分辨率</span>
@@ -389,6 +395,18 @@ function EditItemModal({ item, onClose, onDone }: { item: LibraryItem; onClose: 
         <label className="label">标签（逗号分隔）</label>
         <input className="input" value={tags} onChange={(e) => setTags(e.target.value)} />
       </div>
+      {item.type === 'effect' && (
+        <>
+          <div className="form-row">
+            <label className="label">生成描述</label>
+            <textarea className="textarea" rows={3} value={genPrompt} onChange={(e) => setGenPrompt(e.target.value)} />
+          </div>
+          <div className="form-row">
+            <label className="label">融入说明（合成时自动注入整体提示词）</label>
+            <textarea className="textarea" rows={3} value={blendPrompt} onChange={(e) => setBlendPrompt(e.target.value)} />
+          </div>
+        </>
+      )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
         <button className="btn" onClick={onClose}>
           取消
