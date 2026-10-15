@@ -47,6 +47,18 @@ describe('生成文件定位', () => {
     expect((await revealResult('run')).ok).toBe(true);
     expect(launch.spawn).toHaveBeenCalledWith('explorer.exe', ['/select,', fs.realpathSync(file)], { windowsHide: true, detached: true, stdio: 'ignore' });
   });
+  it.runIf(process.platform === 'win32')('打开后调用 PowerShell 将资源管理器窗口置前，中文与空格路径编码安全', () => {
+    const calls = launch.spawn.mock.calls as unknown as [string, string[]][];
+    const helper = calls.find(([cmd]) => /[\\/]powershell\.exe$/i.test(cmd));
+    expect(helper).toBeTruthy();
+    const args = helper![1];
+    const idx = args.indexOf('-EncodedCommand');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const script = Buffer.from(args[idx + 1], 'base64').toString('utf16le');
+    expect(script).toContain(`$dir = '${path.dirname(fs.realpathSync(file))}'`);
+    expect(script).toContain(`$file = '${fs.realpathSync(file)}'`);
+    expect(script).toContain('SetForegroundWindow');
+  });
   it('接口可读取现有结果位置，拒绝外部网页触发资源管理器', async () => {
     const { registerRunsRoutes } = await import('../src/routes/runs');
     const app = Fastify(); registerRunsRoutes(app);
