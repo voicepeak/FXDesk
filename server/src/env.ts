@@ -48,7 +48,7 @@ export function abs(relPath: string): string {
 }
 
 export function ensureWorkspaceDirs(): void {
-  const dirs = ['', 'jobs', 'library', 'library/history', 'library/plates', 'library/refs', 'trash', 'logs', 'models', 'demo', 'refsearch'];
+  const dirs = ['', 'jobs', 'library', 'library/history', 'library/plates', 'library/refs', 'library/effects', 'trash', 'logs', 'models', 'demo', 'refsearch'];
   for (const d of dirs) fs.mkdirSync(ws(d), { recursive: true });
 }
 

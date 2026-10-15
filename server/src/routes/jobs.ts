@@ -14,6 +14,7 @@ import { emitJobUpdate, emitLibUpdate } from '../sse';
 import { deliverJob } from '../archive';
 import { removePath } from '../fsSafe';
 import { logEvent } from '../logger';
+import { isMaterialRole } from '../prep';
 import type { JobRow, MaterialRow, RegionRow, RunRow } from '../types';
 
 const ALLOWED_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp']);
@@ -94,7 +95,7 @@ export function writeJobSnapshot(jobId: string): void {
 
 function jobSummary(job: JobRow) {
   const db = getDb();
-  const lastRun = db.prepare('SELECT * FROM runs WHERE job_id=? ORDER BY seq DESC LIMIT 1').get(job.id) as RunRow | undefined;
+  const lastRun = db.prepare("SELECT * FROM runs WHERE job_id=? AND type != 'effect' ORDER BY seq DESC LIMIT 1").get(job.id) as RunRow | undefined;
   const materialCount = (db.prepare('SELECT COUNT(*) AS c FROM job_materials WHERE job_id=?').get(job.id) as { c: number }).c;
   const regionCount = (db.prepare('SELECT COUNT(*) AS c FROM job_regions WHERE job_id=? AND is_repair=0').get(job.id) as { c: number }).c;
   return {
@@ -102,6 +103,7 @@ function jobSummary(job: JobRow) {
     name: job.name,
     status: job.status,
     character: job.character,
+    brief: job.brief ?? '',
     thumb: job.original_path ? `/api/files/${job.original_path}` : null,
     createdAt: job.created_at,
     updatedAt: job.updated_at,
@@ -126,11 +128,13 @@ async function buildPreview(job: JobRow) {
   const db = getDb();
   const settings = loadSettings();
   const regions = db.prepare('SELECT * FROM job_regions WHERE job_id=? AND is_repair=0 ORDER BY idx').all(job.id) as RegionRow[];
+  const materials = db.prepare('SELECT * FROM job_materials WHERE job_id=? ORDER BY order_index').all(job.id) as MaterialRow[];
   const templates: AssembleTemplates = {
     tplSystem: settings.tplSystem,
     tplRegion: settings.tplRegion,
     tplGlobal: settings.tplGlobal,
     tplEnding: settings.tplEnding,
+    tplBlend: settings.tplBlend,
   };
   let W = 0;
   let H = 0;
@@ -141,11 +145,38 @@ async function buildPreview(job: JobRow) {
   } catch {
     /* original missing */
   }
-  const regionInputs = regions.map((r) => ({ idx: r.idx, color: r.color, bbox: parseBbox(r.bbox_json), instruction: r.instruction }));
+  const blendByItemId = new Map<string, string>();
+  const itemIds = [...new Set(materials.map((m) => m.library_item_id).filter((v): v is string => !!v))];
+  for (const itemId of itemIds) {
+    const item = db.prepare('SELECT blend_prompt FROM library_items WHERE id=?').get(itemId) as { blend_prompt: string | null } | undefined;
+    if (item?.blend_prompt && item.blend_prompt.trim()) blendByItemId.set(itemId, item.blend_prompt.trim());
+  }
+  const matById = new Map(materials.map((m) => [m.id, m]));
+  const blendNotesOf = (refTokensJson: string): { refNo: number; blendPrompt: string }[] => {
+    const notes: { refNo: number; blendPrompt: string }[] = [];
+    for (const t of parseTokens(refTokensJson)) {
+      const m = matById.get(t.materialId);
+      const blend = m?.library_item_id ? blendByItemId.get(m.library_item_id) : undefined;
+      if (blend) notes.push({ refNo: m?.order_index ?? t.refNo, blendPrompt: blend });
+    }
+    return notes;
+  };
+  const regionInputs = regions.map((r) => ({
+    idx: r.idx,
+    color: r.color,
+    bbox: parseBbox(r.bbox_json),
+    instruction: r.instruction,
+    blendNotes: blendNotesOf(r.ref_tokens),
+  }));
   const assembled = assemblePrompt({ regions: regionInputs, globalInstruction: job.global_instruction, templates, W, H });
   const regionLines = regions.map((r) => ({
     regionId: r.id,
-    line: regionLine({ idx: r.idx, color: r.color, bbox: parseBbox(r.bbox_json), instruction: r.instruction }, templates, W, H),
+    line: regionLine(
+      { idx: r.idx, color: r.color, bbox: parseBbox(r.bbox_json), instruction: r.instruction, blendNotes: blendNotesOf(r.ref_tokens) },
+      templates,
+      W,
+      H
+    ),
   }));
   return { blocks: assembled.blocks, finalPrompt: assembled.finalPrompt, regionLines, width: W, height: H };
 }
@@ -196,7 +227,12 @@ export function registerJobsRoutes(app: FastifyInstance): void {
     if (!job) throw apiError(404, 'JOB_NOT_FOUND', '客单不存在');
     const materials = db.prepare('SELECT * FROM job_materials WHERE job_id=? ORDER BY order_index').all(id) as MaterialRow[];
     const regions = db.prepare('SELECT * FROM job_regions WHERE job_id=? AND is_repair=0 ORDER BY idx').all(id) as RegionRow[];
-    const runs = (db.prepare('SELECT * FROM runs WHERE job_id=? ORDER BY seq').all(id) as RunRow[]).map((r) => ({
+    const blendByItemId = new Map<string, string>();
+    for (const itemId of [...new Set(materials.map((m) => m.library_item_id).filter((v): v is string => !!v))]) {
+      const item = db.prepare('SELECT blend_prompt FROM library_items WHERE id=?').get(itemId) as { blend_prompt: string | null } | undefined;
+      if (item?.blend_prompt && item.blend_prompt.trim()) blendByItemId.set(itemId, item.blend_prompt.trim());
+    }
+    const runs = (db.prepare("SELECT * FROM runs WHERE job_id=? AND type != 'effect' ORDER BY seq").all(id) as RunRow[]).map((r) => ({
       id: r.id,
       seq: r.seq,
       type: r.type,
@@ -221,6 +257,7 @@ export function registerJobsRoutes(app: FastifyInstance): void {
         name: job.name,
         status: job.status,
         character: job.character,
+        brief: job.brief ?? '',
         globalInstruction: job.global_instruction,
         originalUrl: `/api/files/${job.original_path}`,
         finalRunId: job.final_run_id,
@@ -233,6 +270,8 @@ export function registerJobsRoutes(app: FastifyInstance): void {
         source: m.source,
         libraryItemId: m.library_item_id,
         displayName: m.display_name,
+        role: m.role ?? 'general',
+        blendPrompt: m.library_item_id ? blendByItemId.get(m.library_item_id) ?? '' : '',
         fileUrl: m.file_path ? `/api/files/${m.file_path}` : libraryFileUrl(m.library_item_id),
         orderIndex: m.order_index,
       })),
@@ -254,9 +293,10 @@ export function registerJobsRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const job = db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as JobRow | undefined;
     if (!job) throw apiError(404, 'JOB_NOT_FOUND', '客单不存在');
-    const body = (req.body ?? {}) as { name?: string; character?: string; global_instruction?: string };
+    const body = (req.body ?? {}) as { name?: string; character?: string; global_instruction?: string; brief?: string };
     if (body.name !== undefined) db.prepare('UPDATE jobs SET name=?, updated_at=? WHERE id=?').run(String(body.name), Date.now(), id);
     if (body.character !== undefined) db.prepare('UPDATE jobs SET character=?, updated_at=? WHERE id=?').run(String(body.character), Date.now(), id);
+    if (body.brief !== undefined) db.prepare('UPDATE jobs SET brief=?, updated_at=? WHERE id=?').run(String(body.brief).slice(0, 2000), Date.now(), id);
     if (body.global_instruction !== undefined)
       db.prepare('UPDATE jobs SET global_instruction=?, updated_at=? WHERE id=?').run(String(body.global_instruction), Date.now(), id);
     writeJobSnapshot(id);
@@ -307,6 +347,8 @@ export function registerJobsRoutes(app: FastifyInstance): void {
     db.prepare('DELETE FROM job_materials WHERE job_id=?').run(id);
     db.prepare('DELETE FROM job_regions WHERE job_id=?').run(id);
     db.prepare('DELETE FROM reviews WHERE run_id IN (SELECT id FROM runs WHERE job_id=?)').run(id);
+    db.prepare('DELETE FROM job_effects WHERE job_id=?').run(id);
+    db.prepare('DELETE FROM job_preps WHERE job_id=?').run(id);
     db.prepare('DELETE FROM runs WHERE job_id=?').run(id);
     db.prepare('DELETE FROM jobs WHERE id=?').run(id);
     logEvent('info', `客单已删除（移至回收站）：${id}`, { jobId: id });
@@ -331,6 +373,7 @@ export function registerJobsRoutes(app: FastifyInstance): void {
       const { files, fields } = await readMultipart(req);
       const file = files.find((f) => f.fieldname === 'file');
       if (!file) throw apiError(400, 'NO_FILE', '缺少素材文件（字段名 file）');
+      const role = isMaterialRole(fields.role) ? fields.role : 'general';
       const ext = path.extname(file.filename).toLowerCase() || '.png';
       if (!['.jpg', '.jpeg', '.png', '.webp', '.gif', '.tif', '.tiff', '.avif'].includes(ext)) throw apiError(400, 'MATERIAL_TYPE', '参考图支持 JPG、PNG、WebP、GIF、TIFF、AVIF');
       if (file.truncated || file.buf.length > 50 * 1024 * 1024) throw apiError(400, 'MATERIAL_TOO_LARGE', '参考图不能超过 50 MB');
@@ -351,27 +394,30 @@ export function registerJobsRoutes(app: FastifyInstance): void {
       const target = path.join(dir, filename);
       fs.writeFileSync(target, normalized);
       const displayName = (fields.displayName ?? '').trim() || path.basename(file.filename, ext);
-      db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index) VALUES (?, ?, ?, NULL, ?, ?, ?)').run(
+      db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index, role) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)').run(
         materialId,
         id,
         'client',
         displayName,
         rel(target),
-        order
+        order,
+        role
       );
     } else {
-      const body = (req.body ?? {}) as { libraryItemId?: string; displayName?: string };
+      const body = (req.body ?? {}) as { libraryItemId?: string; displayName?: string; role?: string };
       if (!body.libraryItemId) throw apiError(400, 'NO_LIBRARY_ITEM', '缺少 libraryItemId');
       const item = db.prepare('SELECT * FROM library_items WHERE id=?').get(body.libraryItemId) as { id: string; title: string; file_path: string } | undefined;
       if (!item) throw apiError(404, 'LIB_ITEM_NOT_FOUND', '库素材不存在');
       const displayName = (body.displayName ?? '').trim() || item.title || '库素材';
-      db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index) VALUES (?, ?, ?, ?, ?, NULL, ?)').run(
+      const role = isMaterialRole(body.role) ? body.role : 'general';
+      db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index, role) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)').run(
         materialId,
         id,
         'library',
         item.id,
         displayName,
-        order
+        order,
+        role
       );
     }
 
@@ -383,15 +429,21 @@ export function registerJobsRoutes(app: FastifyInstance): void {
   app.patch('/api/jobs/:id/materials/:mid', async (req) => {
     const db = getDb();
     const { id, mid } = req.params as { id: string; mid: string };
-    const body = (req.body ?? {}) as { displayName?: string };
-    if (body.displayName === undefined) throw apiError(400, 'NO_DISPLAY_NAME', '缺少 displayName');
+    const body = (req.body ?? {}) as { displayName?: string; role?: string };
+    if (body.displayName === undefined && body.role === undefined) throw apiError(400, 'NO_PATCH', '缺少 displayName 或 role');
     const m = db.prepare('SELECT * FROM job_materials WHERE id=? AND job_id=?').get(mid, id) as MaterialRow | undefined;
     if (!m) throw apiError(404, 'MATERIAL_NOT_FOUND', '素材不存在');
-    db.prepare('UPDATE job_materials SET display_name=? WHERE id=?').run(String(body.displayName), mid);
-    const regions = db.prepare('SELECT * FROM job_regions WHERE job_id=? AND is_repair=0').all(id) as RegionRow[];
-    for (const r of regions) {
-      const tokens = parseTokens(r.ref_tokens).map((t) => (t.materialId === mid ? { ...t, name: String(body.displayName) } : t));
-      db.prepare('UPDATE job_regions SET ref_tokens=? WHERE id=?').run(JSON.stringify(tokens), r.id);
+    if (body.displayName !== undefined) {
+      db.prepare('UPDATE job_materials SET display_name=? WHERE id=?').run(String(body.displayName), mid);
+      const regions = db.prepare('SELECT * FROM job_regions WHERE job_id=? AND is_repair=0').all(id) as RegionRow[];
+      for (const r of regions) {
+        const tokens = parseTokens(r.ref_tokens).map((t) => (t.materialId === mid ? { ...t, name: String(body.displayName) } : t));
+        db.prepare('UPDATE job_regions SET ref_tokens=? WHERE id=?').run(JSON.stringify(tokens), r.id);
+      }
+    }
+    if (body.role !== undefined) {
+      if (!isMaterialRole(body.role)) throw apiError(400, 'BAD_ROLE', '用途标记无效');
+      db.prepare('UPDATE job_materials SET role=? WHERE id=?').run(body.role, mid);
     }
     writeJobSnapshot(id);
     emitJobUpdate(id);
@@ -621,8 +673,8 @@ export function registerJobsRoutes(app: FastifyInstance): void {
     }
     const now = Date.now();
     db.prepare(
-      'INSERT INTO jobs (id, name, status, original_path, global_instruction, character, cost_total, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)'
-    ).run(newId, name, 'draft', newOriginalRel, src.global_instruction, src.character, now, now);
+      'INSERT INTO jobs (id, name, status, original_path, global_instruction, character, brief, cost_total, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)'
+    ).run(newId, name, 'draft', newOriginalRel, src.global_instruction, src.character, src.brief ?? '', now, now);
 
     const oldMats = db.prepare('SELECT * FROM job_materials WHERE job_id=? ORDER BY order_index').all(id) as MaterialRow[];
     const oldToNew = new Map<string, string>();
@@ -632,13 +684,14 @@ export function registerJobsRoutes(app: FastifyInstance): void {
       if (m.source === 'library' && m.library_item_id) {
         const item = db.prepare('SELECT id FROM library_items WHERE id=?').get(m.library_item_id) as { id: string } | undefined;
         if (!item) continue;
-        db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index) VALUES (?, ?, ?, ?, ?, NULL, ?)').run(
+        db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index, role) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)').run(
           newMid,
           newId,
           'library',
           m.library_item_id,
           m.display_name,
-          m.order_index
+          m.order_index,
+          m.role ?? 'general'
         );
       } else if ((m.source === 'client' || m.source === 'web') && m.file_path) {
         const srcFile = abs(m.file_path);
@@ -646,13 +699,14 @@ export function registerJobsRoutes(app: FastifyInstance): void {
         const base = path.basename(srcFile);
         const target = ws('jobs', newId, 'materials', 'client', base);
         fs.copyFileSync(srcFile, target);
-        db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index) VALUES (?, ?, ?, NULL, ?, ?, ?)').run(
+        db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index, role) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)').run(
           newMid,
           newId,
           m.source,
           m.display_name,
           rel(target),
-          m.order_index
+          m.order_index,
+          m.role ?? 'general'
         );
       }
     }

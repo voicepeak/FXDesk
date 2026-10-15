@@ -15,6 +15,9 @@ import { registerSettingsRoutes } from './routes/settings';
 import { registerFilesRoutes } from './routes/files';
 import { registerEventsRoutes } from './routes/events';
 import { registerRefSearchRoutes } from './routes/refsearch';
+import { registerPrepRoutes } from './routes/prep';
+import { registerDoubaoRoutes } from './routes/doubao';
+import { recoverPrepInterrupted } from './prep';
 
 const PORT = Number(process.env.PORT ?? 3210);
 
@@ -24,7 +27,8 @@ async function main(): Promise<void> {
   pruneLogs(7);
   loadSettings(true);
   const recovered = queueManager.recoverInterrupted();
-  if (recovered) logLine('info', `启动恢复：${recovered} 条中断任务已标记为 failed(interrupted)`);
+  const recoveredPrep = recoverPrepInterrupted();
+  if (recovered || recoveredPrep) logLine('info', `启动恢复：${recovered} 条中断任务、${recoveredPrep} 条中断筹备已标记为 failed(interrupted)`);
 
   const app = Fastify({ logger: false, bodyLimit: 10 * 1024 * 1024 });
 
@@ -48,6 +52,8 @@ async function main(): Promise<void> {
   registerFilesRoutes(app);
   registerEventsRoutes(app);
   registerRefSearchRoutes(app);
+  registerPrepRoutes(app);
+  registerDoubaoRoutes(app);
 
   const webDist = path.join(PROJECT_ROOT, 'web', 'dist');
   if (fs.existsSync(path.join(webDist, 'index.html'))) {

@@ -38,6 +38,8 @@ function itemDto(row: LibraryItemRow) {
     width: row.width,
     height: row.height,
     background: row.background,
+    prompt: row.prompt ?? '',
+    blendPrompt: row.blend_prompt ?? '',
     createdAt: row.created_at,
   };
 }
@@ -49,7 +51,7 @@ export function registerLibraryRoutes(app: FastifyInstance): void {
     let rows = db.prepare('SELECT * FROM library_items ORDER BY created_at DESC').all() as LibraryItemRow[];
     rows = rows.filter((r) => (r.status as string) !== 'deleted');
 
-    if (qs.zone === 'library') rows = rows.filter((r) => r.type === 'plate' || r.type === 'ref');
+    if (qs.zone === 'library') rows = rows.filter((r) => r.type === 'plate' || r.type === 'ref' || r.type === 'effect');
     else if (qs.zone === 'favorites') rows = rows.filter((r) => r.favorite);
     else if (qs.zone === 'history') rows = rows.filter((r) => r.type === 'history');
 
@@ -163,10 +165,12 @@ export function registerLibraryRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const row = db.prepare('SELECT * FROM library_items WHERE id=?').get(id) as LibraryItemRow | undefined;
     if (!row) throw apiError(404, 'LIB_ITEM_NOT_FOUND', '素材不存在');
-    const body = (req.body ?? {}) as { title?: string; tags?: string[]; status?: string };
+    const body = (req.body ?? {}) as { title?: string; tags?: string[]; status?: string; prompt?: string; blendPrompt?: string };
     if (body.title !== undefined) db.prepare('UPDATE library_items SET title=? WHERE id=?').run(String(body.title), id);
     if (body.tags !== undefined && Array.isArray(body.tags)) db.prepare('UPDATE library_items SET tags_json=? WHERE id=?').run(JSON.stringify(body.tags.map(String)), id);
     if (body.status !== undefined && ['candidate', 'active'].includes(body.status)) db.prepare('UPDATE library_items SET status=? WHERE id=?').run(body.status, id);
+    if (body.prompt !== undefined) db.prepare('UPDATE library_items SET prompt=? WHERE id=?').run(String(body.prompt).slice(0, 2000), id);
+    if (body.blendPrompt !== undefined) db.prepare('UPDATE library_items SET blend_prompt=? WHERE id=?').run(String(body.blendPrompt).slice(0, 1000), id);
     emitLibUpdate('updated', id);
     return { ok: true };
   });

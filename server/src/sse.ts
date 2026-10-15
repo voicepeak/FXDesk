@@ -51,7 +51,7 @@ export function buildJobUpdate(jobId: string, extra?: { stage?: string | null; e
   const db = getDb();
   const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobRow | undefined;
   if (!job) return null;
-  const lastRun = db.prepare('SELECT * FROM runs WHERE job_id = ? ORDER BY seq DESC LIMIT 1').get(jobId) as RunRow | undefined;
+  const lastRun = db.prepare("SELECT * FROM runs WHERE job_id = ? AND type != 'effect' ORDER BY seq DESC LIMIT 1").get(jobId) as RunRow | undefined;
   return {
     jobId: job.id,
     name: job.name,
@@ -67,6 +67,20 @@ export function buildJobUpdate(jobId: string, extra?: { stage?: string | null; e
 export function emitJobUpdate(jobId: string, extra?: { stage?: string | null; elapsed?: number | null; error?: string | null }): void {
   const payload = buildJobUpdate(jobId, extra);
   if (payload) bus.broadcast('job_update', payload);
+}
+
+export interface PrepUpdatePayload {
+  jobId: string;
+  kind: 'analysis' | 'proposal' | 'effect';
+  status: string;
+  effectId?: string | null;
+  error?: string | null;
+  /** 执行阶段描述（用于前端显示进度，如「正在上传图片…」） */
+  stage?: string | null;
+}
+
+export function emitPrepUpdate(payload: PrepUpdatePayload): void {
+  bus.broadcast('prep_update', payload);
 }
 
 export function emitRunProgress(runId: string, jobId: string, stage: string, elapsedMs: number, pct?: number, details?: { attempt?: number; message?: string; retryAt?: number }): void {

@@ -5,6 +5,7 @@ export interface JobRow {
   original_path: string;
   global_instruction: string;
   character: string;
+  brief: string;
   final_run_id: string | null;
   orig_width: number | null;
   orig_height: number | null;
@@ -24,6 +25,8 @@ export type JobStatus =
   | 'delivered'
   | 'canceled';
 
+export type MaterialRole = 'general' | 'analysis' | 'style' | 'item' | 'effect';
+
 export interface MaterialRow {
   id: string;
   job_id: string;
@@ -32,6 +35,7 @@ export interface MaterialRow {
   display_name: string;
   file_path: string | null;
   order_index: number;
+  role: MaterialRole;
 }
 
 export interface Bbox {
@@ -60,7 +64,7 @@ export interface RegionRow {
   is_repair: number;
 }
 
-export type RunType = 'initial' | 'rerun' | 'repair' | 'faceRepair';
+export type RunType = 'initial' | 'rerun' | 'repair' | 'faceRepair' | 'effect';
 export type RunStatus = 'queued' | 'generating' | 'qc' | 'done' | 'failed' | 'canceled';
 
 export interface RunRow {
@@ -99,7 +103,7 @@ export interface UpscaleRecord {
 
 export interface LibraryItemRow {
   id: string;
-  type: 'plate' | 'ref' | 'history';
+  type: 'plate' | 'ref' | 'history' | 'effect';
   file_path: string;
   job_id: string | null;
   title: string;
@@ -111,7 +115,62 @@ export interface LibraryItemRow {
   width: number | null;
   height: number | null;
   background: string | null;
+  prompt: string;
+  blend_prompt: string;
   created_at: number;
+}
+
+export type PrepTaskStatus = 'idle' | 'running' | 'done' | 'failed';
+
+export interface AnalysisResult {
+  character: string;
+  work: string;
+  aliases: string[];
+  scene: string;
+  confidence: number | null;
+  notes: string;
+}
+
+export interface JobPrepRow {
+  id: string;
+  job_id: string;
+  analysis_status: PrepTaskStatus;
+  analysis_result: string | null;
+  analysis_raw: string | null;
+  analysis_error: string | null;
+  analysis_confirmed_at: number | null;
+  analysis_started_at: number | null;
+  analysis_finished_at: number | null;
+  proposal_status: PrepTaskStatus;
+  proposal_result: string | null;
+  proposal_raw: string | null;
+  proposal_error: string | null;
+  proposal_started_at: number | null;
+  proposal_finished_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export type EffectKind = 'light' | 'prop' | 'background' | 'other';
+
+export type EffectStatus = 'ready' | 'queued' | 'generating' | 'review' | 'failed' | 'approved';
+
+export interface JobEffectRow {
+  id: string;
+  job_id: string;
+  seq: number;
+  title: string;
+  kind: EffectKind;
+  gen_prompt: string;
+  blend_prompt: string;
+  ref_material_ids: string;
+  status: EffectStatus;
+  run_id: string | null;
+  image_path: string | null;
+  error: string | null;
+  library_item_id: string | null;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface QcIdentity {
@@ -121,6 +180,28 @@ export interface QcIdentity {
   passThreshold?: number;
   midThreshold?: number;
   afterRepair?: { sim: number | null; status: string } | null;
+  afterLock?: { sim: number | null; status: string } | null;
+}
+
+/** 锁脸（复制图层）结果：原图脸区对齐贴回 + 光照匹配 + 宽羽化 */
+export interface QcFaceLock {
+  applied: boolean;
+  reason?: string;
+  simBefore?: number | null;
+  simAfter?: number | null;
+  pass?: boolean;
+  passThreshold?: number;
+  /** aligned = 按对齐落点采样（默认）；detected = 检测器复检 */
+  simMethod?: 'aligned' | 'detected';
+  runId?: string;
+  path?: string;
+  expand?: number;
+  feather?: number;
+  angleDeg?: number;
+  scale?: number;
+  alignResidual?: number;
+  lightMatch?: boolean;
+  elapsedMs?: number;
 }
 
 export interface QcComposition {
@@ -134,4 +215,5 @@ export interface QcResult {
   composition: QcComposition | null;
   elements: { confirmed: { label: string; checked: boolean }[] };
   faceRepair?: { triggered: boolean; runId?: string; status?: string; error?: string } | null;
+  faceLock?: QcFaceLock | null;
 }

@@ -5,9 +5,9 @@ import { randomUUID } from 'node:crypto';
 import PQueue from 'p-queue';
 import { getDb } from './db';
 import { abs, rel, ws } from './env';
-import { loadSettings, type AppSettings } from './settings';
+import { loadSettings, resolveEffectSettings, type AppSettings } from './settings';
 import { logEvent, logLine } from './logger';
-import { assemblePrompt, applyTemplate, colorName, locationOf, parseBbox } from './prompt';
+import { assemblePrompt, applyTemplate, colorName, locationOf, parseBbox, parseTokens } from './prompt';
 import type { AssembleTemplates } from './prompt';
 import { renderMarkers } from './markers';
 import { canvasConstraint, closestAspectRatio } from './imageGeometry';
@@ -15,11 +15,14 @@ import { generateWithFallback, MomoError, type ImagePart } from './momo';
 import { runIdentityCheck } from './qc';
 import { analyzeComposition } from './qc/composition';
 import { performFaceRepair } from './qc/faceRepair';
+import { applyFaceLock } from './qc/faceLock';
+import { cosineSimilarity, embedFace } from './qc/faces';
 import { upscaleToOriginal } from './upscale';
 import { extractNouns } from './tagging';
-import { emitJobUpdate, emitRunProgress } from './sse';
+import { emitJobUpdate, emitPrepUpdate, emitRunProgress } from './sse';
 import { notifyComplete, notifyFail } from './notify';
-import type { Bbox, JobRow, MaterialRow, QcResult, RegionRow, RunRow } from './types';
+import { materialRoleLabel } from './prep';
+import type { Bbox, JobEffectRow, JobRow, MaterialRow, QcResult, RegionRow, RunRow } from './types';
 
 export function runDirName(seq: number): string {
   return `run_${String(seq).padStart(4, '0')}`;
@@ -28,6 +31,7 @@ export function runDirName(seq: number): string {
 interface ActiveInfo {
   jobId: string;
   runId: string;
+  runType: string;
   stage: string;
   startedAt: number;
   cancelRequested?: boolean;
@@ -36,6 +40,7 @@ interface ActiveInfo {
   retryAt?: number;
   timeoutSec?: number;
   imageSize?: string;
+  effectId?: string;
 }
 
 interface RunPrep {
@@ -77,8 +82,8 @@ export class QueueManager {
     };
   }
 
-  private removePending(jobId: string): void {
-    this.pendingJobs = this.pendingJobs.filter((p) => p.jobId !== jobId);
+  private removePending(runId: string): void {
+    this.pendingJobs = this.pendingJobs.filter((p) => p.runId !== runId);
   }
 
   cancelRun(runId: string): { ok: boolean; error?: string } {
@@ -86,8 +91,17 @@ export class QueueManager {
     const run = db.prepare('SELECT * FROM runs WHERE id = ?').get(runId) as RunRow | undefined;
     if (!run) return { ok: false, error: 'RUN_NOT_FOUND' };
     if (run.status === 'queued') {
-      this.removePending(run.job_id);
+      this.removePending(runId);
       db.prepare("UPDATE runs SET status='canceled', error='canceled', finished_at=? WHERE id=?").run(Date.now(), runId);
+      if (run.type === 'effect') {
+        const effectId = effectIdOf(run);
+        if (effectId) {
+          db.prepare("UPDATE job_effects SET status='ready', error=NULL, updated_at=? WHERE id=?").run(Date.now(), effectId);
+          emitPrepUpdate({ jobId: run.job_id, kind: 'effect', status: 'ready', effectId });
+        }
+        emitJobUpdate(run.job_id);
+        return { ok: true };
+      }
       db.prepare("UPDATE jobs SET status='canceled', updated_at=? WHERE id=?").run(Date.now(), run.job_id);
       emitJobUpdate(run.job_id, { stage: 'canceled' });
       return { ok: true };
@@ -120,8 +134,9 @@ export class QueueManager {
     const jobsOf = (ids: { jobId: string; runId: string }[]) =>
       ids.map(({ jobId, runId }, i) => {
         const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobRow | undefined;
+        const run = db.prepare('SELECT type FROM runs WHERE id = ?').get(runId) as { type: string } | undefined;
         return job
-          ? { jobId: job.id, runId, name: job.name, thumb: job.original_path ? `/api/files/${job.original_path}` : null, position: i + 1 }
+          ? { jobId: job.id, runId, name: job.name, runType: run?.type ?? 'initial', thumb: job.original_path ? `/api/files/${job.original_path}` : null, position: i + 1 }
           : null;
       }).filter(Boolean);
 
@@ -140,6 +155,7 @@ export class QueueManager {
           jobId: a.jobId,
           runId: a.runId,
           name: job?.name ?? a.jobId,
+          runType: a.runType,
           thumb: job?.original_path ? `/api/files/${job.original_path}` : null,
           stage: a.stage,
           elapsed: Date.now() - a.startedAt,
@@ -163,11 +179,11 @@ export class QueueManager {
     // PQueue cannot remove a queued callback; a canceled run must never reach the paid API.
     const queuedRun = db.prepare('SELECT status FROM runs WHERE id=?').get(runId) as { status: string } | undefined;
     if (queuedRun?.status !== 'queued') return;
-    this.removePending(jobId);
+    this.removePending(runId);
     const ctrl = new AbortController();
     this.aborts.set(runId, ctrl);
     const startedAt = Date.now();
-    const info: ActiveInfo = { jobId, runId, stage: 'uploading', startedAt };
+    const info: ActiveInfo = { jobId, runId, runType: 'initial', stage: 'uploading', startedAt };
     this.active.set(jobId, info);
     const stage = (s: string) => {
       info.stage = s;
@@ -182,8 +198,15 @@ export class QueueManager {
       const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobRow | undefined;
       if (!run || !job) throw new Error('run/job 不存在');
       const settings = loadSettings();
+      info.runType = run.type;
       info.timeoutSec = settings.runTimeoutSec;
       info.imageSize = settings.imageSize;
+
+      if (run.type === 'effect') {
+        info.effectId = effectIdOf(run) ?? undefined;
+        await this.processEffect(job, run, settings, ctrl, info, stage, startedAt);
+        return;
+      }
 
       const isRepair = run.type === 'repair';
       db.prepare("UPDATE runs SET status='generating' WHERE id=?").run(runId);
@@ -292,6 +315,71 @@ export class QueueManager {
         logLine('warn', `身份检测失败：${String(e)}`);
       }
 
+      // 最后一步（§4.7.5 锁脸）：无论重修与否，都把原图脸区对齐贴回（复制图层）+ 光照匹配，
+      // 复检后以 qcFaceLockPass（默认 0.95）为硬门槛；这是交付前的最后一道图像操作。
+      if (settings.qcFaceLock) {
+        try {
+          const lockRun = db.prepare('SELECT * FROM runs WHERE id=?').get(finalRunId) as RunRow | undefined;
+          const lockDir = ws('jobs', jobId, '02_runs', runDirName(lockRun?.seq ?? run.seq));
+          fs.mkdirSync(lockDir, { recursive: true });
+          const lockedAbs = path.join(lockDir, 'result_locked.png');
+          const lockStartedAt = Date.now();
+          const lock = await applyFaceLock({ origAbs, resultAbs: finalAbs, outAbs: lockedAbs });
+          if (lock.applied) {
+            // 复检按“对齐后实际落点”采样（不再经检测器二次抖动，尤其是发丝遮挡眼周时）
+            const simBefore = qc.identity.sim;
+            let simAfter: number | null = null;
+            if (lock.origKps && lock.placedKps) {
+              const [eo, el] = await Promise.all([embedFace(origAbs, lock.origKps), embedFace(lockedAbs, lock.placedKps)]);
+              simAfter = Number(cosineSimilarity(eo, el).toFixed(4));
+            } else {
+              const recheck = await runIdentityCheck(origAbs, lockedAbs, { ...settings, qcAutoFaceRepair: false });
+              simAfter = recheck.identity.sim;
+            }
+            const pass = simAfter != null && simAfter >= settings.qcFaceLockPass;
+            qc.identity.afterLock = { sim: simAfter, status: pass ? 'pass' : 'fail' };
+            qc.identity.status = pass ? 'pass' : 'fail';
+            qc.faceLock = {
+              applied: true,
+              simBefore,
+              simAfter,
+              pass,
+              passThreshold: settings.qcFaceLockPass,
+              simMethod: lock.origKps && lock.placedKps ? 'aligned' : 'detected',
+              runId: finalRunId,
+              path: rel(lockedAbs),
+              angleDeg: lock.angleDeg,
+              scale: lock.scale,
+              alignResidual: lock.alignResidual,
+              lightMatch: lock.lightMatch,
+              elapsedMs: Date.now() - lockStartedAt,
+            };
+            finalAbs = lockedAbs;
+            db.prepare('UPDATE runs SET result_final_path=? WHERE id=?').run(rel(lockedAbs), finalRunId);
+            const owner = db.prepare('SELECT qc_json FROM runs WHERE id=?').get(finalRunId) as { qc_json: string | null } | undefined;
+            if (owner?.qc_json) {
+              try {
+                const oq = JSON.parse(owner.qc_json) as QcResult;
+                oq.identity.afterLock = qc.identity.afterLock;
+                oq.identity.status = qc.identity.status;
+                oq.faceLock = qc.faceLock;
+                db.prepare('UPDATE runs SET qc_json=? WHERE id=?').run(JSON.stringify(oq), finalRunId);
+                fs.writeFileSync(path.join(lockDir, 'qc.json'), JSON.stringify(oq, null, 2), 'utf8');
+              } catch {
+                /* ignore */
+              }
+            }
+            logEvent('info', `锁脸完成：${simBefore ?? '—'} → ${simAfter ?? '—'}（门槛 ${settings.qcFaceLockPass}，${pass ? '通过' : '未达标'}）`, { jobId, runId });
+          } else {
+            qc.faceLock = { applied: false, reason: lock.reason };
+            logLine('warn', `锁脸未执行（保持原结果）：${lock.reason}`);
+          }
+        } catch (e) {
+          qc.faceLock = { applied: false, reason: e instanceof Error ? e.message : String(e) };
+          logLine('warn', `锁脸失败（保持原结果）：${String(e)}`);
+        }
+      }
+
       qc.elements.confirmed = this.suggestElements(jobId);
 
       const qcPath = path.join(runDir, 'qc.json');
@@ -307,6 +395,22 @@ export class QueueManager {
     } catch (e) {
       const canceled = ctrl.signal.aborted || (e instanceof MomoError && e.code === 'CANCELED');
       const db2 = getDb();
+      if (info.runType === 'effect') {
+        const effectId = info.effectId ?? null;
+        if (canceled) {
+          db2.prepare("UPDATE runs SET status='canceled', error='canceled', finished_at=? WHERE id=?").run(Date.now(), runId);
+          if (effectId) db2.prepare("UPDATE job_effects SET status='ready', error=NULL, updated_at=? WHERE id=?").run(Date.now(), effectId);
+          emitPrepUpdate({ jobId, kind: 'effect', status: 'ready', effectId });
+        } else {
+          const friendly = friendlyError(e);
+          db2.prepare('UPDATE runs SET status=?, error=?, finished_at=?, elapsed_ms=? WHERE id=?').run('failed', friendly, Date.now(), Date.now() - startedAt, runId);
+          if (effectId) db2.prepare("UPDATE job_effects SET status='failed', error=?, updated_at=? WHERE id=?").run(friendly, Date.now(), effectId);
+          logEvent('error', `特效预演失败：${friendly}`, { jobId, runId });
+          emitPrepUpdate({ jobId, kind: 'effect', status: 'failed', effectId, error: friendly });
+          emitJobUpdate(jobId);
+        }
+        return;
+      }
       const errMsg = e instanceof MomoError ? e.message : e instanceof Error ? e.message : String(e);
       if (canceled) {
         db2.prepare("UPDATE runs SET status='canceled', error='canceled', finished_at=? WHERE id=?").run(Date.now(), runId);
@@ -332,6 +436,135 @@ export class QueueManager {
       this.aborts.delete(runId);
       emitJobUpdate(jobId);
     }
+  }
+
+  /** AI 筹备：特效预演生成（runs.type='effect'）。输入=场图+所选参考图，输出 1K 级预演草图；不参与质检/超分，不改客单状态。 */
+  private async processEffect(
+    job: JobRow,
+    run: RunRow,
+    settings: AppSettings,
+    ctrl: AbortController,
+    info: ActiveInfo,
+    stage: (s: string) => void,
+    startedAt: number
+  ): Promise<void> {
+    const db = getDb();
+    const runId = run.id;
+    const effectId = effectIdOf(run);
+    if (!effectId) throw new MomoError('EFFECT_NOT_FOUND', '特效条目不存在');
+    const effect = db.prepare('SELECT * FROM job_effects WHERE id=? AND job_id=?').get(effectId, job.id) as JobEffectRow | undefined;
+    if (!effect) throw new MomoError('EFFECT_NOT_FOUND', '特效条目不存在');
+    if (!effect.gen_prompt.trim()) throw new MomoError('EFFECT_EMPTY_PROMPT', '该特效的生成描述为空，请先填写再生成');
+
+    db.prepare("UPDATE runs SET status='generating' WHERE id=?").run(runId);
+    db.prepare("UPDATE job_effects SET status='generating', error=NULL, run_id=?, updated_at=? WHERE id=?").run(runId, Date.now(), effectId);
+    emitPrepUpdate({ jobId: job.id, kind: 'effect', status: 'generating', effectId });
+
+    stage('uploading');
+    const maxDim = Math.min(settings.sendMaxDimension, 4096);
+    const origAbs = abs(job.original_path);
+    const origPart = await imagePartFromFile(origAbs, maxDim, false, true);
+    const refIds = parseIdList(effect.ref_material_ids);
+    const materials = db.prepare('SELECT * FROM job_materials WHERE job_id=? ORDER BY order_index').all(job.id) as MaterialRow[];
+    const selected = materials.filter((m) => refIds.includes(m.id));
+    const refNotes: string[] = ['图1=场图（请基于它构图）'];
+    const encodeRefs = async (tier: number): Promise<{ images: ImagePart[]; notes: string[] }> => {
+      const images: ImagePart[] = [tier >= maxDim ? origPart : await imagePartFromFile(origAbs, tier, false, true)];
+      const notes: string[] = ['图1=场图（请基于它构图）'];
+      let idx = 2;
+      for (const m of selected) {
+        const fileAbs = materialFileAbs(m);
+        if (!fileAbs) {
+          notes.push(`图${idx}=（缺失：${m.display_name}）`);
+          idx++;
+          continue;
+        }
+        images.push(await imagePartFromFile(fileAbs, Math.min(tier, 2048), false, true));
+        notes.push(`图${idx}=${materialRoleLabel(m.role)}（${m.display_name}）`);
+        idx++;
+      }
+      return { images, notes };
+    };
+    let parts = await encodeRefs(maxDim);
+    let totalBytes = parts.images.reduce((sum, p) => sum + p.base64.length, 0);
+    if (totalBytes > TOTAL_SIZE_LIMIT) {
+      logLine('warn', `特效预演发送体积 ${Math.round(totalBytes / 1048576)}MB 超限，降档到长边 2048`);
+      parts = await encodeRefs(2048);
+      totalBytes = parts.images.reduce((sum, p) => sum + p.base64.length, 0);
+    }
+    refNotes.length = 0;
+    refNotes.push(...parts.notes);
+    info.message = `发送 ${parts.images.length} 张图（约 ${Math.round(totalBytes / 1048576)}MB）`;
+
+    const prompt = [settings.tplEffectSystem, effect.gen_prompt, `【本次附图】${refNotes.join('；')}`].filter((s) => s && s.trim()).join('\n');
+    db.prepare('UPDATE runs SET final_prompt=?, marker_path=NULL WHERE id=?').run(prompt, runId);
+
+    const meta0 = await sharp(origAbs).metadata();
+    const aspectRatio = settings.aspectRatio.trim() || closestAspectRatio(meta0.width ?? 1, meta0.height ?? 1);
+    const effectSettings = resolveEffectSettings(settings);
+    if (!effectSettings.modelId.trim()) throw new MomoError('EFFECT_NO_MODEL', '未配置特效模型 ID（设置页「AI 筹备」）');
+
+    stage('generating');
+    const gen = await generateWithFallback({
+      images: parts.images,
+      prompt,
+      signal: ctrl.signal,
+      settings: effectSettings,
+      aspectRatio,
+      mockReturn: origPart,
+      context: { jobId: job.id, runId },
+      onProgress: (progress) => {
+        info.attempt = progress.attempt;
+        info.message = progress.message;
+        info.retryAt = progress.retryAt;
+        stage(progress.stage);
+      },
+    });
+
+    stage('downloading');
+    const ext = /jpe?g/i.test(gen.mime) ? 'jpg' : 'png';
+    const runDir = ws('jobs', job.id, '02_runs', runDirName(run.seq));
+    fs.mkdirSync(runDir, { recursive: true });
+    const resultAbs = path.join(runDir, `result.${ext}`);
+    fs.writeFileSync(resultAbs, Buffer.from(gen.base64, 'base64'));
+
+    const elapsed = Date.now() - startedAt;
+    db.prepare("UPDATE runs SET result_path=?, result_final_path=?, status='done', elapsed_ms=?, finished_at=? WHERE id=?").run(
+      rel(resultAbs),
+      rel(resultAbs),
+      elapsed,
+      Date.now(),
+      runId
+    );
+    db.prepare("UPDATE job_effects SET status='review', image_path=?, error=NULL, updated_at=? WHERE id=?").run(rel(resultAbs), Date.now(), effectId);
+
+    try {
+      const meta = {
+        runId,
+        seq: run.seq,
+        type: 'effect',
+        effectId,
+        title: effect.title,
+        model: effectSettings.modelId,
+        genPrompt: effect.gen_prompt,
+        blendPrompt: effect.blend_prompt,
+        refs: refNotes,
+        imageCount: parts.images.length,
+        finalPrompt: prompt,
+        aspectRatio,
+        mocked: gen.mocked === true,
+        startedAt,
+        finishedAt: Date.now(),
+        elapsedMs: elapsed,
+      };
+      fs.writeFileSync(path.join(runDir, 'request.json'), JSON.stringify(meta, null, 2), 'utf8');
+    } catch {
+      /* non fatal */
+    }
+
+    logEvent('info', `特效预演完成：${effect.title}（${Math.round(elapsed / 1000)} 秒）`, { jobId: job.id, runId });
+    emitPrepUpdate({ jobId: job.id, kind: 'effect', status: 'review', effectId });
+    emitJobUpdate(job.id);
   }
 
   /** 自动面部重修（§4.7.4）：同 Job 内联执行，产物登记为新的 faceRepair Run */
@@ -454,6 +687,7 @@ export class QueueManager {
       tplRegion: settings.tplRegion,
       tplGlobal: settings.tplGlobal,
       tplEnding: settings.tplEnding,
+      tplBlend: settings.tplBlend,
     };
 
     if (run.type === 'repair') {
@@ -510,6 +744,25 @@ export class QueueManager {
       .all(job.id) as RegionRow[];
     const materials = db.prepare('SELECT * FROM job_materials WHERE job_id=? ORDER BY order_index').all(job.id) as MaterialRow[];
 
+    // 库素材的融入说明（blend_prompt）→ 按区域的参考图引用注入
+    const blendByItemId = new Map<string, string>();
+    const itemIds = [...new Set(materials.map((m) => m.library_item_id).filter((v): v is string => !!v))];
+    for (const itemId of itemIds) {
+      const item = db.prepare('SELECT blend_prompt FROM library_items WHERE id=?').get(itemId) as { blend_prompt: string | null } | undefined;
+      if (item?.blend_prompt && item.blend_prompt.trim()) blendByItemId.set(itemId, item.blend_prompt.trim());
+    }
+    const matById = new Map(materials.map((m) => [m.id, m]));
+    const blendNotesOf = (refTokensJson: string): { refNo: number; blendPrompt: string }[] => {
+      const tokens = parseTokens(refTokensJson);
+      const notes: { refNo: number; blendPrompt: string }[] = [];
+      for (const t of tokens) {
+        const m = matById.get(t.materialId);
+        const blend = m?.library_item_id ? blendByItemId.get(m.library_item_id) : undefined;
+        if (blend) notes.push({ refNo: matById.get(t.materialId)?.order_index ?? t.refNo, blendPrompt: blend });
+      }
+      return notes;
+    };
+
     const origAbs = abs(job.original_path);
     const meta = await sharp(origAbs).metadata();
     const W = meta.width ?? 0;
@@ -524,7 +777,13 @@ export class QueueManager {
     });
 
     const assembled = assemblePrompt({
-      regions: regions.map((r) => ({ idx: r.idx, color: r.color, bbox: parseBbox(r.bbox_json), instruction: r.instruction })),
+      regions: regions.map((r) => ({
+        idx: r.idx,
+        color: r.color,
+        bbox: parseBbox(r.bbox_json),
+        instruction: r.instruction,
+        blendNotes: blendNotesOf(r.ref_tokens),
+      })),
       globalInstruction: job.global_instruction,
       templates,
       W,
@@ -558,8 +817,10 @@ export class QueueManager {
       return {
         refNo: m.order_index,
         displayName: m.display_name,
+        role: m.role,
         source: m.source,
         libraryItemId: m.library_item_id,
+        blendPrompt: m.library_item_id ? blendByItemId.get(m.library_item_id) ?? '' : '',
         file: rel(fileAbs),
         width: part.width ?? 0,
         height: part.height ?? 0,
@@ -742,6 +1003,36 @@ function libraryFileAbs(libraryItemId: string | null): string | null {
   const item = db.prepare('SELECT file_path FROM library_items WHERE id = ?').get(libraryItemId) as { file_path: string } | undefined;
   if (!item) return null;
   return abs(item.file_path);
+}
+
+function materialFileAbs(m: MaterialRow): string | null {
+  if ((m.source === 'client' || m.source === 'web') && m.file_path) {
+    const p = abs(m.file_path);
+    return fs.existsSync(p) ? p : null;
+  }
+  if (m.source === 'library' && m.library_item_id) {
+    const p = libraryFileAbs(m.library_item_id);
+    return p && fs.existsSync(p) ? p : null;
+  }
+  return null;
+}
+
+function effectIdOf(run: RunRow): string | null {
+  try {
+    const meta = run.request_json ? (JSON.parse(run.request_json) as { effectId?: string }) : {};
+    return meta.effectId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function parseIdList(json: string | null): string[] {
+  try {
+    const v = JSON.parse(json ?? '[]');
+    return Array.isArray(v) ? v.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
 }
 
 export const queueManager = new QueueManager();

@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   original_path TEXT NOT NULL,
   global_instruction TEXT DEFAULT '',
   character TEXT DEFAULT '',
+  brief TEXT DEFAULT '',
   final_run_id TEXT,
   orig_width INTEGER,
   orig_height INTEGER,
@@ -26,7 +27,8 @@ CREATE TABLE IF NOT EXISTS job_materials (
   library_item_id TEXT,
   display_name TEXT NOT NULL,
   file_path TEXT,
-  order_index INTEGER NOT NULL
+  order_index INTEGER NOT NULL,
+  role TEXT DEFAULT 'general'
 );
 
 CREATE TABLE IF NOT EXISTS job_regions (
@@ -82,7 +84,47 @@ CREATE TABLE IF NOT EXISTS library_items (
   status TEXT DEFAULT 'active',
   width INTEGER, height INTEGER,
   background TEXT,
+  prompt TEXT DEFAULT '',
+  blend_prompt TEXT DEFAULT '',
   created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS job_preps (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL UNIQUE REFERENCES jobs(id),
+  analysis_status TEXT NOT NULL DEFAULT 'idle',
+  analysis_result TEXT,
+  analysis_raw TEXT,
+  analysis_error TEXT,
+  analysis_confirmed_at INTEGER,
+  analysis_started_at INTEGER,
+  analysis_finished_at INTEGER,
+  proposal_status TEXT NOT NULL DEFAULT 'idle',
+  proposal_result TEXT,
+  proposal_raw TEXT,
+  proposal_error TEXT,
+  proposal_started_at INTEGER,
+  proposal_finished_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS job_effects (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES jobs(id),
+  seq INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'other',
+  gen_prompt TEXT NOT NULL DEFAULT '',
+  blend_prompt TEXT NOT NULL DEFAULT '',
+  ref_material_ids TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'ready',
+  run_id TEXT,
+  image_path TEXT,
+  error TEXT,
+  library_item_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -107,13 +149,19 @@ function tableColumns(d: Database.Database, table: string): Set<string> {
   return new Set(rows.map((r) => r.name));
 }
 
-/** 老库增量迁移（PRD v1.1 附录 E：超分回填字段） */
+/** 老库增量迁移（PRD v1.1 附录 E：超分回填字段；v1.2：AI 筹备字段） */
 function migrate(d: Database.Database): void {
   const jobCols = tableColumns(d, 'jobs');
   if (!jobCols.has('orig_width')) d.exec('ALTER TABLE jobs ADD COLUMN orig_width INTEGER');
   if (!jobCols.has('orig_height')) d.exec('ALTER TABLE jobs ADD COLUMN orig_height INTEGER');
+  if (!jobCols.has('brief')) d.exec("ALTER TABLE jobs ADD COLUMN brief TEXT DEFAULT ''");
   const runCols = tableColumns(d, 'runs');
   if (!runCols.has('upscale_json')) d.exec('ALTER TABLE runs ADD COLUMN upscale_json TEXT');
+  const matCols = tableColumns(d, 'job_materials');
+  if (!matCols.has('role')) d.exec("ALTER TABLE job_materials ADD COLUMN role TEXT DEFAULT 'general'");
+  const libCols = tableColumns(d, 'library_items');
+  if (!libCols.has('prompt')) d.exec("ALTER TABLE library_items ADD COLUMN prompt TEXT DEFAULT ''");
+  if (!libCols.has('blend_prompt')) d.exec("ALTER TABLE library_items ADD COLUMN blend_prompt TEXT DEFAULT ''");
 }
 
 export function openDb(dbPath?: string): Database.Database {

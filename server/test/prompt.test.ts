@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assemblePrompt, applyTemplate, colorName, locationOf, paletteColor } from '../src/prompt';
+import { assemblePrompt, applyTemplate, colorName, locationOf, paletteColor, regionLine } from '../src/prompt';
 import type { AssembleTemplates } from '../src/prompt';
 
 const templates: AssembleTemplates = {
@@ -77,5 +77,74 @@ describe('提示词拼装器（§4.4.4）', () => {
 describe('方位描述算法（附录 B.3）补充', () => {
   it('locationOf 组合格式', () => {
     expect(locationOf({ x1: 100, y1: 400, x2: 300, y2: 600 }, 1000, 1000)).toBe('画面左侧中部，覆盖范围较小');
+  });
+});
+
+describe('素材融入说明注入（AI 筹备）', () => {
+  const tpl: AssembleTemplates = {
+    tplSystem: 'SYS',
+    tplRegion: '【{{color}}框 第{{n}}区】位置：{{location}}。要求：{{instruction}}',
+    tplGlobal: '【全局修改】{{globalInstruction}}',
+    tplEnding: 'END',
+    tplBlend: '【参考图{{refNo}}·融入要求】{{blendPrompt}}',
+  };
+
+  it('引用含 blend_prompt 的素材时，区域块自动附带融入要求', () => {
+    const result = assemblePrompt({
+      regions: [
+        {
+          idx: 1,
+          color: '#E53935',
+          bbox: { x1: 0, y1: 0, x2: 100, y2: 100 },
+          instruction: '把参考图2的特效溶入',
+          blendNotes: [{ refNo: 2, blendPrompt: '本特效环绕在人物身后，人物在前景遮挡' }],
+        },
+      ],
+      globalInstruction: '',
+      templates: tpl,
+      W: 1000,
+      H: 1000,
+    });
+    expect(result.finalPrompt).toContain('要求：把参考图2的特效溶入');
+    expect(result.finalPrompt).toContain('【参考图2·融入要求】本特效环绕在人物身后，人物在前景遮挡');
+  });
+
+  it('无 blendNotes 或模板缺 tplBlend 时不注入', () => {
+    const noNotes = assemblePrompt({
+      regions: [{ idx: 1, color: '#E53935', bbox: { x1: 0, y1: 0, x2: 100, y2: 100 }, instruction: 'x' }],
+      globalInstruction: '',
+      templates: tpl,
+      W: 1000,
+      H: 1000,
+    });
+    expect(noNotes.finalPrompt).not.toContain('融入要求');
+
+    const noTpl: AssembleTemplates = { ...tpl, tplBlend: undefined };
+    const withNotes = assemblePrompt({
+      regions: [
+        { idx: 1, color: '#E53935', bbox: { x1: 0, y1: 0, x2: 100, y2: 100 }, instruction: 'x', blendNotes: [{ refNo: 1, blendPrompt: 'B' }] },
+      ],
+      globalInstruction: '',
+      templates: noTpl,
+      W: 1000,
+      H: 1000,
+    });
+    expect(withNotes.finalPrompt).not.toContain('融入要求');
+  });
+
+  it('regionLine 预览包含融入要求（与最终提示词一致）', () => {
+    const line = regionLine(
+      {
+        idx: 1,
+        color: '#FDD835',
+        bbox: { x1: 0, y1: 0, x2: 100, y2: 100 },
+        instruction: 'x',
+        blendNotes: [{ refNo: 3, blendPrompt: 'PREVIEW-BLEND' }],
+      },
+      tpl,
+      1000,
+      1000
+    );
+    expect(line).toContain('PREVIEW-BLEND');
   });
 });

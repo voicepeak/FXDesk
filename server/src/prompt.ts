@@ -83,6 +83,8 @@ export interface AssembleRegionInput {
   color: string;
   bbox: Bbox;
   instruction: string;
+  /** 引用素材的融入说明（来自库素材 blend_prompt），随区域一起注入 */
+  blendNotes?: { refNo: number; blendPrompt: string }[];
 }
 
 export interface AssembleTemplates {
@@ -90,6 +92,8 @@ export interface AssembleTemplates {
   tplRegion: string;
   tplGlobal: string;
   tplEnding: string;
+  /** 融入说明模板（把参考图N的素材如何溶入画面写清，防歧义），留空则不注入 */
+  tplBlend?: string;
 }
 
 export interface AssembledBlock {
@@ -103,6 +107,21 @@ export interface AssembledBlock {
 export interface AssembledPrompt {
   finalPrompt: string;
   blocks: AssembledBlock[];
+}
+
+/** 区域块文本 = 区域模板 + 各引用素材的融入说明（如有） */
+export function regionBlockText(region: AssembleRegionInput, templates: AssembleTemplates, W: number, H: number): string {
+  const base = applyTemplate(templates.tplRegion, {
+    color: colorName(region.color),
+    n: String(region.idx),
+    location: locationOf(region.bbox, W, H),
+    instruction: region.instruction,
+  });
+  if (!templates.tplBlend) return base;
+  const lines = (region.blendNotes ?? [])
+    .filter((n) => n.blendPrompt.trim())
+    .map((n) => applyTemplate(templates.tplBlend!, { refNo: String(n.refNo), blendPrompt: n.blendPrompt.trim() }));
+  return lines.length ? [base, ...lines].join('\n') : base;
 }
 
 /** §4.4.4 拼装算法 */
@@ -120,13 +139,7 @@ export function assemblePrompt(input: {
 
   const sorted = [...regions].sort((a, b) => a.idx - b.idx);
   for (const r of sorted) {
-    const location = locationOf(r.bbox, W, H);
-    const text = applyTemplate(templates.tplRegion, {
-      color: colorName(r.color),
-      n: String(r.idx),
-      location,
-      instruction: r.instruction,
-    });
+    const text = regionBlockText(r, templates, W, H);
     blocks.push({ kind: 'region', label: `区域块 ${r.idx}`, text, regionId: undefined, color: normalizeHex(r.color) });
   }
 
@@ -145,12 +158,7 @@ export function assemblePrompt(input: {
 
 /** 单个区域行的预览文本（供前端总览展示） */
 export function regionLine(region: AssembleRegionInput, templates: AssembleTemplates, W: number, H: number): string {
-  return applyTemplate(templates.tplRegion, {
-    color: colorName(region.color),
-    n: String(region.idx),
-    location: locationOf(region.bbox, W, H),
-    instruction: region.instruction,
-  });
+  return regionBlockText(region, templates, W, H);
 }
 
 export function parseBbox(json: string): Bbox {

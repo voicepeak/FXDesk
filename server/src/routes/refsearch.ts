@@ -10,6 +10,7 @@ import { emitJobUpdate } from '../sse';
 import { logEvent } from '../logger';
 import { apiError, writeJobSnapshot } from './jobs';
 import type { JobRow } from '../types';
+import { isMaterialRole } from '../prep';
 import { fetchXhsImage, fetchXhsThumb, isAllowedImageUrl, startXhsLogin, xhsBrowserInstalled, xhsLoginInfo, xhsProfileDir, xhsSearch } from '../refsearch/xhs';
 
 export function registerRefSearchRoutes(app: FastifyInstance): void {
@@ -50,9 +51,10 @@ export function registerRefSearchRoutes(app: FastifyInstance): void {
 
   app.post('/api/refsearch/import', async (req) => {
     const db = getDb();
-    const body = (req.body ?? {}) as { jobId?: string; imageUrl?: string; title?: string };
+    const body = (req.body ?? {}) as { jobId?: string; imageUrl?: string; title?: string; role?: string };
     const jobId = String(body.jobId ?? '');
     const imageUrl = String(body.imageUrl ?? '');
+    const role = isMaterialRole(body.role) ? body.role : 'general';
     const job = db.prepare('SELECT * FROM jobs WHERE id=?').get(jobId) as JobRow | undefined;
     if (!job) throw apiError(404, 'JOB_NOT_FOUND', '客单不存在');
     if (!isAllowedImageUrl(imageUrl)) throw apiError(400, 'BAD_IMAGE_URL', '仅支持小红书图片链接');
@@ -85,13 +87,14 @@ export function registerRefSearchRoutes(app: FastifyInstance): void {
     const target = path.join(dir, filename);
     fs.writeFileSync(target, normalized);
 
-    db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index) VALUES (?, ?, ?, NULL, ?, ?, ?)').run(
+    db.prepare('INSERT INTO job_materials (id, job_id, source, library_item_id, display_name, file_path, order_index, role) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)').run(
       materialId,
       jobId,
       'web',
       displayName,
       rel(target),
-      order
+      order,
+      role
     );
     writeJobSnapshot(jobId);
     emitJobUpdate(jobId);
